@@ -1,0 +1,110 @@
+# -----------------------------------------------------------------------------
+# Secrets and local configuration
+# -----------------------------------------------------------------------------
+**/.env
+**/.env.*
+!**/.env.example
+**/aws_credentials.json
+**/.streamlit/secrets.toml
+**/*secret*.json
+**/*credentials*.json
+!**/*credentials*.example.json
+*.pem
+*.key
+*.p12
+*.pfx
+
+# -----------------------------------------------------------------------------
+# Private source corpus and derived knowledge
+# These files can contain internal company information and must remain local.
+# -----------------------------------------------------------------------------
+/material/**
+!/material/README.md
+
+/WIKI/backend/raw/**
+!/WIKI/backend/raw/.gitkeep
+
+/WIKI/backend/wiki/**
+!/WIKI/backend/wiki/.gitkeep
+
+# The real benchmark contains facts and evidence derived from the private corpus.
+/test_QA/mateial/**
+!/test_QA/mateial/README.md
+
+# -----------------------------------------------------------------------------
+# Generated evaluation artifacts and reports
+# -----------------------------------------------------------------------------
+/test_QA/**/results/
+/test_QA/**/report/
+/test_QA/report/
+/output/
+/tmp/
+
+# Local evaluator configuration can reference credentials or paid models.
+/test_QA/**/config.json
+
+# -----------------------------------------------------------------------------
+# Python
+# -----------------------------------------------------------------------------
+**/__pycache__/
+*.py[cod]
+*.pyd
+.pytest_cache/
+**/.pytest_cache/
+.mypy_cache/
+**/.mypy_cache/
+.ruff_cache/
+**/.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.venv/
+**/.venv/
+venv/
+**/venv/
+dist/
+build/
+*.egg-info/
+
+# -----------------------------------------------------------------------------
+# Local databases, indexes, models, and caches
+# -----------------------------------------------------------------------------
+*.db
+*.sqlite
+*.sqlite3
+*.faiss
+*.index
+*.pkl
+*.pickle
+*.npy
+*.npz
+*.onnx
+*.pt
+*.bin
+**/chroma*/
+**/qdrant*/
+**/vector_store*/
+**/model_cache*/
+**/.cache/
+
+# -----------------------------------------------------------------------------
+# Logs, temporary files, editors, and operating systems
+# -----------------------------------------------------------------------------
+*.log
+*.tmp
+*.temp
+~$*
+.idea/
+**/.idea/
+.vscode/
+**/.vscode/
+**/.obsidian/
+.DS_Store
+**/.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Local backups of Git metadata, if ever needed during migration.
+/.git-backups/
