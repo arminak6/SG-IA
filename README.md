@@ -17,7 +17,7 @@ and diagnostics side by side.
 
 | Component | Status | Purpose |
 | --- | --- | --- |
-| `WIKI/` | Working proof of concept | FastAPI backend, persistent Markdown LLM Wiki, Streamlit UI, ingestion, citations, linting, and tests |
+| `WIKI/` | Working proof of concept | FastAPI backend, persistent Markdown LLM Wiki, hybrid Wiki-page search, Streamlit UI, ingestion, citations, linting, and tests |
 | `RAG/` | Planned | Independent RAG backend and Streamlit UI using the same source corpus |
 | `test_QA/` | Evaluation harness available | Shared semantic evaluation design and WIKI benchmark runner |
 | Final comparison UI | Planned | Send one question to both backends and compare the responses |
@@ -111,4 +111,3 @@ git push
 
 Always review `git diff --cached` before committing. This is the final check
 that no credential, source document, or generated private content is included.
-

@@ -49,6 +49,15 @@ component; do not treat their absence as a change in the intended architecture.
 - Keep approach-specific internals separate. Put only genuinely shared API
   contracts, evaluation fixtures, or utilities in shared code.
 - Never commit credentials, API keys, tokens, or local secret files.
+- Treat the current documents, entities, filenames, benchmark questions,
+  ground-truth answers, and scores only as temporary evaluation examples. They
+  are not product requirements and must never be embedded in prompts or code.
+- Never improve benchmark scores by hardcoding question IDs, wording, expected
+  answers, document-specific mappings, filenames, thresholds, or special-case
+  response rules. Improvements must be corpus-agnostic and suitable for unseen
+  production documents and questions.
+- Validate quality changes on held-out documents and paraphrased/unseen
+  questions, not only on the current benchmark, to detect leakage and overfit.
 
 ## Intended end-to-end flow
 
@@ -108,6 +117,11 @@ when they are agreed.
 - WIKI graph lint now reports weak incoming/outgoing page relationships, and
   `POST /wiki/lint/repair-links` uses bounded semantic review to add only
   backend-authored, validated, bidirectional cross-links.
+- WIKI Q&A now uses hybrid retrieval over generated Wiki pages: deterministic
+  lexical search plus configurable Amazon Bedrock Titan Text Embeddings V2
+  similarity, fused by rank. Page embeddings are content-hash cached locally,
+  refreshed after ingestion, and safely fall back to lexical search during an
+  embedding outage. Raw-document chunks are never placed in this index.
 - `test_QA/mateial/ground_truth_qa.json` is the initial shared evaluation fixture: 25
   Italian questions grounded in the WIKI raw corpus, with required answer
   points, source locators, evidence, and two insufficient-knowledge controls.
@@ -130,6 +144,18 @@ when they are agreed.
   The management report is available as editable DOCX and presentation-ready
   PDF under `test_QA/WIKI/report/`; a two-page chart-focused executive PDF is
   available at `output/pdf/SG-IA_WIKI_Two_Page_Executive_Summary.pdf`.
+- The post-hybrid-search comparison run is
+  `test_QA/WIKI/results/20260807-hybrid-consolidated`. It contains one
+  successful chatbot and Claude Opus 5 judgment for each of the same 25 cases;
+  its manifest records bounded retry recovery for four transient failures.
+  Compared with the clean baseline, average correctness moved from 3.84 to
+  3.92, score >=4 from 72% to 76%, groundedness from 86.4% to 92.3%, expected
+  source recall from 91.3% to 100%, and average server latency from 6.03 to
+  6.64 seconds. This is a single stochastic comparison, not a statistical
+  conclusion. The standalone two-page report for the hybrid run is
+  `output/pdf/SG-IA_WIKI_Two_Page_Executive_Summary_Hybrid.pdf`; detailed
+  Italian and English question/answer records are `README.md` and
+  `README_EN.md` inside the consolidated result directory.
 
 ## Decisions still required
 

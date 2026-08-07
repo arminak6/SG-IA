@@ -10,7 +10,9 @@ from typing import Sequence
 from .agent import WikiAgent, build_ingestion_prompt
 from .bedrock import BedrockConverseClient
 from .config import BedrockSettings, load_settings
+from .embeddings import TitanEmbeddingClient
 from .repository import RepositoryError, WikiRepository
+from .search import HybridWikiSearch
 
 
 class WikiService:
@@ -23,6 +25,7 @@ class WikiService:
         repository: WikiRepository | None = None,
         bedrock: BedrockConverseClient | None = None,
         agent: WikiAgent | None = None,
+        searcher: HybridWikiSearch | None = None,
     ) -> None:
         self.settings = settings or load_settings()
         self.repository = repository or WikiRepository(
@@ -32,6 +35,7 @@ class WikiService:
         )
         self._bedrock = bedrock
         self._agent = agent
+        self._searcher = searcher
         self._update_lock = threading.Lock()
 
     @property
@@ -41,10 +45,24 @@ class WikiService:
         return self._bedrock
 
     @property
+    def searcher(self) -> HybridWikiSearch:
+        if self._searcher is None:
+            embedder = (
+                TitanEmbeddingClient(self.settings)
+                if self.settings.semantic_search_enabled
+                else None
+            )
+            self._searcher = HybridWikiSearch(self.repository, embedder)
+        return self._searcher
+
+    @property
     def agent(self) -> WikiAgent:
         if self._agent is None:
             self._agent = WikiAgent(
-                self.repository, self.bedrock, max_steps=self.settings.max_agent_steps
+                self.repository,
+                self.bedrock,
+                max_steps=self.settings.max_agent_steps,
+                searcher=self.searcher,
             )
         return self._agent
 

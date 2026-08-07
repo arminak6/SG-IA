@@ -30,6 +30,10 @@ class BedrockSettings:
     project_root: Path
     region_name: str | None
     bedrock_model_id: str
+    embedding_model_id: str = "amazon.titan-embed-text-v2:0"
+    embedding_dimensions: int = 512
+    semantic_search_enabled: bool = True
+    embedding_max_input_characters: int = 45_000
     aws_access_key_id: str | None = field(default=None, repr=False)
     aws_secret_access_key: str | None = field(default=None, repr=False)
     aws_session_token: str | None = field(default=None, repr=False)
@@ -81,6 +85,31 @@ def _first(*values: object) -> str | None:
     return None
 
 
+def _boolean(value: object, *, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    cleaned = _clean(value)
+    if cleaned is None:
+        return default
+    normalized = cleaned.casefold()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ConfigurationError(f"Expected a boolean configuration value, received '{cleaned}'.")
+
+
+def _integer(value: object, *, default: int, name: str) -> int:
+    if value is None or value == "":
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise ConfigurationError(f"{name} must be an integer.") from exc
+
+
 def load_settings(
     project_root: Path | str | None = None,
     *,
@@ -106,6 +135,23 @@ def load_settings(
         file_values.get("region_name"),
     )
     model_id = _first(env.get("BEDROCK_MODEL_ID"), file_values.get("bedrock_model_id"))
+    embedding_model_id = _first(
+        env.get("BEDROCK_EMBEDDING_MODEL_ID"),
+        file_values.get("embedding_model_id"),
+        "amazon.titan-embed-text-v2:0",
+    )
+    embedding_dimensions = _integer(
+        env.get("BEDROCK_EMBEDDING_DIMENSIONS", file_values.get("embedding_dimensions")),
+        default=512,
+        name="BEDROCK_EMBEDDING_DIMENSIONS",
+    )
+    semantic_search_enabled = _boolean(
+        env.get(
+            "LLM_WIKI_SEMANTIC_SEARCH_ENABLED",
+            file_values.get("semantic_search_enabled"),
+        ),
+        default=True,
+    )
     env_access_key = _clean(env.get("AWS_ACCESS_KEY_ID"))
     env_secret_key = _clean(env.get("AWS_SECRET_ACCESS_KEY"))
     env_session_token = _clean(env.get("AWS_SESSION_TOKEN"))
@@ -130,11 +176,28 @@ def load_settings(
         )
     if session_token and not access_key:
         raise ConfigurationError("AWS_SESSION_TOKEN requires explicit access key credentials.")
+    if embedding_dimensions not in {256, 512, 1024}:
+        raise ConfigurationError(
+            "BEDROCK_EMBEDDING_DIMENSIONS must be one of 256, 512, or 1024."
+        )
+    if semantic_search_enabled and not embedding_model_id:
+        raise ConfigurationError(
+            "Semantic search requires BEDROCK_EMBEDDING_MODEL_ID or embedding_model_id."
+        )
+    if semantic_search_enabled and not str(embedding_model_id).startswith(
+        "amazon.titan-embed-text-v2"
+    ):
+        raise ConfigurationError(
+            "Semantic search currently requires an Amazon Titan Text Embeddings V2 model ID."
+        )
 
     return BedrockSettings(
         project_root=root,
         region_name=region_name,
         bedrock_model_id=model_id,
+        embedding_model_id=embedding_model_id or "amazon.titan-embed-text-v2:0",
+        embedding_dimensions=embedding_dimensions,
+        semantic_search_enabled=semantic_search_enabled,
         aws_access_key_id=access_key,
         aws_secret_access_key=secret_key,
         aws_session_token=session_token,

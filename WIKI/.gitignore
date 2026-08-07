@@ -4,6 +4,8 @@ aws_credentials.json
 .env.*
 !.env.example
 .streamlit/secrets.toml
+backend/wiki/.semantic-index.json
+backend/wiki/.semantic-index.json.lock
 
 # Python
 __pycache__/

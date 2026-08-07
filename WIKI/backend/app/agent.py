@@ -8,7 +8,9 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 from .bedrock import BedrockConverseClient, ConverseTurn
+from .embeddings import EmbeddingError
 from .repository import RepositoryError, WikiRepository
+from .search import HybridWikiSearch, WikiSearchError
 
 
 logger = logging.getLogger(__name__)
@@ -74,6 +76,7 @@ class AnswerResult:
     usage: dict[str, int]
     pages_read: tuple[str, ...] = ()
     search_queries: tuple[str, ...] = ()
+    search_modes: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -84,6 +87,7 @@ class AnswerResult:
             "debug": {
                 "pages_read": list(self.pages_read),
                 "search_queries": list(self.search_queries),
+                "search_modes": list(self.search_modes),
             },
         }
 
@@ -286,10 +290,12 @@ class WikiAgent:
         bedrock: BedrockConverseClient,
         *,
         max_steps: int = 24,
+        searcher: HybridWikiSearch | None = None,
     ) -> None:
         self.repository = repository
         self.bedrock = bedrock
         self.max_steps = max_steps
+        self.searcher = searcher
 
     def _system_prompt(self, operation_prompt: str) -> str:
         schema = self.repository.read_schema().strip()
@@ -482,6 +488,22 @@ class WikiAgent:
 
         self._validate_ingestion(source_path, source_read=source_read, staged=staged)
         pages_written = tuple(self.repository.commit_ingestion(source_path, staged))
+        index_message = ""
+        if self.searcher is not None and self.searcher.enabled:
+            try:
+                refresh = self.searcher.refresh()
+                index_message = (
+                    f" Semantic index refreshed: {refresh.pages_embedded} changed page(s) "
+                    f"embedded, {refresh.pages_cached} unchanged."
+                )
+            except (EmbeddingError, RepositoryError, WikiSearchError, OSError, ValueError) as exc:
+                # Knowledge is already committed. An embedding outage must not
+                # turn a successful ingestion into a failed ingestion.
+                logger.warning(
+                    "Semantic index refresh deferred after ingestion (%s).",
+                    type(exc).__name__,
+                )
+                index_message = " Semantic index refresh was deferred; lexical search remains available."
         return IngestionResult(
             source_path=source_path,
             prompt=instruction,
@@ -491,7 +513,8 @@ class WikiAgent:
                 "ingestion boundary."
                 if finalized_at_step_limit
                 else last_text or f"Ingested {source_path}."
-            ),
+            )
+            + index_message,
             usage=usage,
         )
 
@@ -576,6 +599,7 @@ class WikiAgent:
         ]
         read_pages: set[str] = set()
         search_queries: list[str] = []
+        search_modes: list[str] = []
         usage: dict[str, int] = {}
         requested_submit_repair = False
 
@@ -646,6 +670,7 @@ class WikiAgent:
                 usage=dict(usage),
                 pages_read=tuple(sorted(read_pages, key=str.casefold)),
                 search_queries=tuple(search_queries),
+                search_modes=tuple(search_modes),
             )
 
         tools = [LIST_WIKI_TOOL, READ_WIKI_TOOL, SEARCH_WIKI_TOOL, SUBMIT_ANSWER_TOOL]
@@ -698,13 +723,28 @@ class WikiAgent:
                         if not query:
                             raise AgentValidationError("Search query cannot be empty.")
                         search_queries.append(query)
+                        if self.searcher is None:
+                            search_results = self.repository.search_wiki(
+                                query, limit=int(inputs.get("limit", 8))
+                            )
+                            search_mode = "lexical"
+                            embedding_input_tokens = 0
+                        else:
+                            search_response = self.searcher.search(
+                                query, limit=int(inputs.get("limit", 8))
+                            )
+                            search_results = list(search_response.results)
+                            search_mode = search_response.mode
+                            embedding_input_tokens = search_response.embedding_input_tokens
+                        search_modes.append(search_mode)
+                        if embedding_input_tokens:
+                            usage["embeddingInputTokens"] = (
+                                usage.get("embeddingInputTokens", 0)
+                                + embedding_input_tokens
+                            )
                         output = {
-                            "results": [
-                                result.to_dict()
-                                for result in self.repository.search_wiki(
-                                    query, limit=int(inputs.get("limit", 8))
-                                )
-                            ]
+                            "mode": search_mode,
+                            "results": [result.to_dict() for result in search_results],
                         }
                     elif name == "read_wiki_page":
                         path = self.repository.normalize_wiki_path(str(inputs.get("path", "")))
@@ -728,6 +768,7 @@ class WikiAgent:
                             usage=dict(usage),
                             pages_read=tuple(sorted(read_pages, key=str.casefold)),
                             search_queries=tuple(search_queries),
+                            search_modes=tuple(search_modes),
                         )
                     else:
                         raise AgentValidationError(f"Unknown Q&A tool: {name}")

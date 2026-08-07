@@ -93,6 +93,7 @@ class CitationResponse(ApiModel):
 class ChatDebugResponse(ApiModel):
     pages_read: List[str] = Field(default_factory=list)
     search_queries: List[str] = Field(default_factory=list)
+    search_modes: List[str] = Field(default_factory=list)
 
 
 class ChatResponse(ApiModel):

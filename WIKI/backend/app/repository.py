@@ -78,7 +78,7 @@ class WikiSearchResult:
     path: str
     title: str
     excerpt: str
-    score: int
+    score: float
 
     def to_dict(self) -> dict[str, object]:
         return {

@@ -49,6 +49,36 @@ standard Boto3 credential chain when explicit keys are omitted.
 The IAM identity needs permission to invoke the configured Bedrock model,
 including `bedrock:InvokeModel` for the Converse API.
 
+## Hybrid Wiki search
+
+Question answering combines the existing deterministic keyword search with
+vector similarity over the generated Wiki pages. It does not embed or retrieve
+chunks directly from `backend/raw`, so the compiled Wiki remains the knowledge
+layer used at query time.
+
+Amazon Titan Text Embeddings V2 is enabled by default with 512 dimensions. Wiki
+page embeddings are cached in `backend/wiki/.semantic-index.json` and keyed by
+the page content hash. New or changed pages are embedded after ingestion;
+unchanged pages reuse their cached vector. An existing Wiki builds its cache on
+the first semantic query. If embeddings are unavailable, Q&A automatically
+falls back to keyword search instead of failing.
+
+The local JSON configuration supports:
+
+```json
+{
+  "embedding_model_id": "amazon.titan-embed-text-v2:0",
+  "embedding_dimensions": 512,
+  "semantic_search_enabled": true
+}
+```
+
+Environment overrides are `BEDROCK_EMBEDDING_MODEL_ID`,
+`BEDROCK_EMBEDDING_DIMENSIONS`, and
+`LLM_WIKI_SEMANTIC_SEARCH_ENABLED`. Set the last value to `false` to use only
+keyword search. Chat responses report `debug.search_modes` so evaluation can
+confirm whether each search used `hybrid`, `lexical`, or `lexical_fallback`.
+
 ## Supported sources
 
 The ingestion layer supports UTF-8 Markdown, text, JSON, and CSV directly. PDF,
