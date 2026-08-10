@@ -77,6 +77,7 @@ class AnswerResult:
     pages_read: tuple[str, ...] = ()
     search_queries: tuple[str, ...] = ()
     search_modes: tuple[str, ...] = ()
+    retrieval_diagnostics: tuple[dict[str, object], ...] = ()
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -88,6 +89,9 @@ class AnswerResult:
                 "pages_read": list(self.pages_read),
                 "search_queries": list(self.search_queries),
                 "search_modes": list(self.search_modes),
+                "retrieval_diagnostics": [
+                    dict(item) for item in self.retrieval_diagnostics
+                ],
             },
         }
 
@@ -493,8 +497,9 @@ class WikiAgent:
             try:
                 refresh = self.searcher.refresh()
                 index_message = (
-                    f" Semantic index refreshed: {refresh.pages_embedded} changed page(s) "
-                    f"embedded, {refresh.pages_cached} unchanged."
+                    f" Semantic section index refreshed: {refresh.sections_embedded} changed "
+                    f"section(s) embedded across {refresh.pages_embedded} page(s), "
+                    f"{refresh.sections_cached} unchanged section(s) reused."
                 )
             except (EmbeddingError, RepositoryError, WikiSearchError, OSError, ValueError) as exc:
                 # Knowledge is already committed. An embedding outage must not
@@ -600,6 +605,7 @@ class WikiAgent:
         read_pages: set[str] = set()
         search_queries: list[str] = []
         search_modes: list[str] = []
+        retrieval_diagnostics: list[dict[str, object]] = []
         usage: dict[str, int] = {}
         requested_submit_repair = False
 
@@ -671,6 +677,7 @@ class WikiAgent:
                 pages_read=tuple(sorted(read_pages, key=str.casefold)),
                 search_queries=tuple(search_queries),
                 search_modes=tuple(search_modes),
+                retrieval_diagnostics=tuple(retrieval_diagnostics),
             )
 
         tools = [LIST_WIKI_TOOL, READ_WIKI_TOOL, SEARCH_WIKI_TOOL, SUBMIT_ANSWER_TOOL]
@@ -729,6 +736,7 @@ class WikiAgent:
                             )
                             search_mode = "lexical"
                             embedding_input_tokens = 0
+                            candidate_diagnostics: list[dict[str, object]] = []
                         else:
                             search_response = self.searcher.search(
                                 query, limit=int(inputs.get("limit", 8))
@@ -736,7 +744,17 @@ class WikiAgent:
                             search_results = list(search_response.results)
                             search_mode = search_response.mode
                             embedding_input_tokens = search_response.embedding_input_tokens
+                            candidate_diagnostics = [
+                                item.to_dict() for item in search_response.diagnostics
+                            ]
                         search_modes.append(search_mode)
+                        retrieval_diagnostics.append(
+                            {
+                                "query": query,
+                                "mode": search_mode,
+                                "candidates": candidate_diagnostics,
+                            }
+                        )
                         if embedding_input_tokens:
                             usage["embeddingInputTokens"] = (
                                 usage.get("embeddingInputTokens", 0)
@@ -745,6 +763,7 @@ class WikiAgent:
                         output = {
                             "mode": search_mode,
                             "results": [result.to_dict() for result in search_results],
+                            "candidates": candidate_diagnostics,
                         }
                     elif name == "read_wiki_page":
                         path = self.repository.normalize_wiki_path(str(inputs.get("path", "")))
@@ -769,6 +788,7 @@ class WikiAgent:
                             pages_read=tuple(sorted(read_pages, key=str.casefold)),
                             search_queries=tuple(search_queries),
                             search_modes=tuple(search_modes),
+                            retrieval_diagnostics=tuple(retrieval_diagnostics),
                         )
                     else:
                         raise AgentValidationError(f"Unknown Q&A tool: {name}")

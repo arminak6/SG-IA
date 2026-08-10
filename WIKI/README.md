@@ -49,19 +49,28 @@ standard Boto3 credential chain when explicit keys are omitted.
 The IAM identity needs permission to invoke the configured Bedrock model,
 including `bedrock:InvokeModel` for the Converse API.
 
-## Hybrid Wiki search
+## Hybrid section search (Version 2)
 
-Question answering combines the existing deterministic keyword search with
-vector similarity over the generated Wiki pages. It does not embed or retrieve
-chunks directly from `backend/raw`, so the compiled Wiki remains the knowledge
-layer used at query time.
+Question answering combines deterministic keyword search over generated Wiki
+pages with vector similarity over their Markdown sections. A section is formed
+from a heading and its body. Semantic section hits are aggregated into unique
+parent-page candidates before results reach the answer agent, so a page cannot
+occupy several candidate slots.
 
-Amazon Titan Text Embeddings V2 is enabled by default with 512 dimensions. Wiki
-page embeddings are cached in `backend/wiki/.semantic-index.json` and keyed by
-the page content hash. New or changed pages are embedded after ingestion;
-unchanged pages reuse their cached vector. An existing Wiki builds its cache on
-the first semantic query. If embeddings are unavailable, Q&A automatically
-falls back to keyword search instead of failing.
+The section match is only a navigation hint. The answer agent receives the
+matching heading and excerpt, chooses the relevant candidates, and must read
+the complete original parent Markdown page before using or citing it. The
+system does not embed or retrieve chunks from `backend/raw`; the compiled Wiki
+remains the query-time knowledge layer.
+
+Amazon Titan Text Embeddings V2 is enabled by default with 512 dimensions.
+Section embeddings are cached locally in
+`backend/wiki/.semantic-index.json`. Each section has a stable identity and
+content hash, so editing one section re-embeds only that section while unchanged
+sections reuse their vectors. The Version 1 page-vector cache is rebuilt
+automatically on the first query or ingestion after upgrading. No vector
+database is required. If embeddings are unavailable, Q&A falls back to keyword
+search instead of failing.
 
 The local JSON configuration supports:
 
@@ -77,7 +86,9 @@ Environment overrides are `BEDROCK_EMBEDDING_MODEL_ID`,
 `BEDROCK_EMBEDDING_DIMENSIONS`, and
 `LLM_WIKI_SEMANTIC_SEARCH_ENABLED`. Set the last value to `false` to use only
 keyword search. Chat responses report `debug.search_modes` so evaluation can
-confirm whether each search used `hybrid`, `lexical`, or `lexical_fallback`.
+confirm whether each search used `hybrid_section`, `lexical`, or
+`lexical_fallback`. `debug.retrieval_diagnostics` records each query, the final
+candidate order, lexical and semantic ranks, and the best matching sections.
 
 ## Supported sources
 

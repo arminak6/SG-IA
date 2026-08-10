@@ -121,9 +121,10 @@ class HybridSearchTests(unittest.TestCase):
 
             response = searcher.search("employee rest requirements", limit=2)
 
-            self.assertEqual(response.mode, "hybrid")
+            self.assertEqual(response.mode, "hybrid_section")
             self.assertEqual(response.results[0].path, "sources/safety.md")
             self.assertGreater(response.embedding_input_tokens, 0)
+            self.assertEqual(response.diagnostics[0].matched_sections[0].heading, "Office Screen Safety")
 
     def test_content_hash_cache_reuses_and_invalidates_embeddings(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -149,6 +150,91 @@ class HybridSearchTests(unittest.TestCase):
             searcher.search("employee rest requirements", limit=2)
             self.assertEqual(len(embedder.calls), 6)  # changed page plus query
             self.assertTrue(cache_path.is_file())
+
+    def test_markdown_is_split_by_heading_and_hits_are_aggregated_to_parent_page(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repository = self.make_repository(temp_dir)
+            repository.write_wiki_pages(
+                {
+                    "sources/handbook.md": wiki_page(
+                        "Employee Handbook",
+                        "raw/safety.txt",
+                        """## Leave
+
+Annual leave is planned with the manager.
+
+## Screen work
+
+Employee rest requirements apply to video display work.""",
+                    )
+                }
+            )
+            searcher = HybridWikiSearch(repository, SemanticEmbedder())
+
+            response = searcher.search("employee rest requirements", limit=3)
+
+            paths = [result.path for result in response.results]
+            self.assertEqual(len(paths), len(set(paths)))
+            handbook = next(
+                item for item in response.diagnostics if item.path == "sources/handbook.md"
+            )
+            self.assertEqual(handbook.matched_sections[0].heading, "Screen work")
+            self.assertIn("Employee rest requirements", handbook.matched_sections[0].excerpt)
+            self.assertIsNotNone(handbook.semantic_rank)
+
+            cache = json.loads(
+                (repository.wiki_root / ".semantic-index.json").read_text(encoding="utf-8")
+            )
+            cached_headings = [
+                section["heading"]
+                for section in cache["pages"]["sources/handbook.md"]["sections"]
+            ]
+            self.assertEqual(cached_headings, ["Leave", "Screen work"])
+
+    def test_refresh_reembeds_only_the_changed_section(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repository = self.make_repository(temp_dir)
+            repository.write_wiki_pages(
+                {
+                    "sources/handbook.md": wiki_page(
+                        "Employee Handbook",
+                        "raw/safety.txt",
+                        """## Leave
+
+Annual leave is planned with the manager.
+
+## Screen work
+
+Video display work requires regular pauses.""",
+                    )
+                }
+            )
+            searcher = HybridWikiSearch(repository, SemanticEmbedder())
+
+            first = searcher.refresh()
+            second = searcher.refresh()
+            repository.write_wiki_pages(
+                {
+                    "sources/handbook.md": wiki_page(
+                        "Employee Handbook",
+                        "raw/safety.txt",
+                        """## Leave
+
+Annual leave requires advance approval from the manager.
+
+## Screen work
+
+Video display work requires regular pauses.""",
+                    )
+                }
+            )
+            third = searcher.refresh()
+
+            self.assertEqual(first.sections_embedded, 4)
+            self.assertEqual(second.sections_embedded, 0)
+            self.assertEqual(second.sections_cached, 4)
+            self.assertEqual(third.sections_embedded, 1)
+            self.assertEqual(third.sections_cached, 3)
 
     def test_embedding_failure_falls_back_to_exact_search(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -192,8 +278,13 @@ class HybridSearchTests(unittest.TestCase):
 
             result = agent.answer("What rest requirements apply to employees?")
 
-            self.assertEqual(result.search_modes, ("hybrid",))
+            self.assertEqual(result.search_modes, ("hybrid_section",))
             self.assertGreater(result.usage["embeddingInputTokens"], 0)
+            self.assertEqual(
+                result.retrieval_diagnostics[0]["candidates"][0]["path"],
+                "sources/safety.md",
+            )
+            self.assertEqual(result.pages_read, ("sources/safety.md",))
             modes = [
                 block["toolResult"]["content"][0]["json"]["mode"]
                 for call in scripted.calls
@@ -204,7 +295,7 @@ class HybridSearchTests(unittest.TestCase):
                 and "mode" in block["toolResult"]["content"][0].get("json", {})
             ]
             self.assertTrue(modes)
-            self.assertEqual(set(modes), {"hybrid"})
+            self.assertEqual(set(modes), {"hybrid_section"})
 
     def test_titan_client_normalizes_and_validates_response(self) -> None:
         class FakeRuntime:

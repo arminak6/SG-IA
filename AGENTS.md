@@ -85,7 +85,7 @@ normalize. At minimum, plan for these conceptual fields:
 Exact endpoint paths and schemas are not yet frozen. Record the decision here
 when they are agreed.
 
-## Current state (2026-08-07)
+## Current state (2026-08-10)
 
 - The project root is initialized as a `main`-branch Git monorepo containing
   the sibling `RAG/` and `WIKI/` implementations. The root README presents the
@@ -117,11 +117,19 @@ when they are agreed.
 - WIKI graph lint now reports weak incoming/outgoing page relationships, and
   `POST /wiki/lint/repair-links` uses bounded semantic review to add only
   backend-authored, validated, bidirectional cross-links.
-- WIKI Q&A now uses hybrid retrieval over generated Wiki pages: deterministic
+- WIKI Q&A uses `wiki-hybrid-section-search-v2`: deterministic page-level
   lexical search plus configurable Amazon Bedrock Titan Text Embeddings V2
-  similarity, fused by rank. Page embeddings are content-hash cached locally,
-  refreshed after ingestion, and safely fall back to lexical search during an
-  embedding outage. Raw-document chunks are never placed in this index.
+  similarity over Markdown heading sections, fused by rank and aggregated into
+  unique parent-page candidates. Section vectors are content-hash cached
+  locally, refreshed after ingestion, and safely fall back to lexical search
+  during an embedding outage. Raw-document chunks are never placed in this
+  index and no vector database is required.
+- Semantic sections are navigation hints, not answer evidence. The answer agent
+  receives matching headings and excerpts, then reads the complete parent Wiki
+  pages it chooses before answering or citing them. The Q&A path intentionally
+  remains the direct Hybrid flow without the evidence-first ledger/verifier.
+  API debug data exposes lexical/semantic ranks, selected parent pages, and
+  matched sections for evaluation.
 - `test_QA/mateial/ground_truth_qa.json` is the initial shared evaluation fixture: 25
   Italian questions grounded in the WIKI raw corpus, with required answer
   points, source locators, evidence, and two insufficient-knowledge controls.
@@ -156,6 +164,16 @@ when they are agreed.
   `output/pdf/SG-IA_WIKI_Two_Page_Executive_Summary_Hybrid.pdf`; detailed
   Italian and English question/answer records are `README.md` and
   `README_EN.md` inside the consolidated result directory.
+- The `wiki-hybrid-section-search-v2` benchmark is
+  `test_QA/WIKI/results/20260810-hybrid-section-v2-consolidated`. It contains
+  one successful chatbot and Claude Opus 5 judgment for all 25 cases, using the
+  first successful recovery result for two transient API failures. Standalone
+  results are 3.88/5 correctness, 73.7% required-point coverage, 89.5%
+  groundedness, 91.3% expected-source recall, 17/23 answerable cases scoring at
+  least 4, and two false abstentions. All 40 recorded searches used
+  `hybrid_section`. Detailed Italian/English records are in that run directory;
+  the two-page report is
+  `output/pdf/SG-IA_WIKI_Two_Page_Executive_Summary_Hybrid_Section_V2.pdf`.
 
 ## Decisions still required
 

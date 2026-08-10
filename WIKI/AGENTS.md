@@ -210,6 +210,22 @@ logic.
   `../test_QA/WIKI/report/`. Its deployment conclusion is controlled internal
   pilot with human review, not unmonitored production use.
 
+### 2026-08-10: hybrid section search Version 2 benchmark
+
+- Upgraded hybrid retrieval from one embedding per Wiki page to content-hash
+  cached Markdown heading sections. Lexical and semantic ranks are fused and
+  section hits are aggregated into unique parent pages; the answer agent still
+  reads complete parent pages before answering or citing them.
+- The local 61-page Wiki produced 186 semantic sections. The live benchmark
+  prewarmed this Version 2 cache before latency measurement.
+- The consolidated 25-case run is
+  `../test_QA/WIKI/results/20260810-hybrid-section-v2-consolidated`; two primary
+  API failures were replaced only by their first successful recovery results.
+  Claude Opus 5 measured 3.88/5 correctness, 73.7% required-point coverage,
+  89.5% groundedness, and 91.3% expected-source recall. Detailed Italian and
+  English records are in the run directory and the standalone two-page report
+  is `../output/pdf/SG-IA_WIKI_Two_Page_Executive_Summary_Hybrid_Section_V2.pdf`.
+
 ## Data rules
 
 - Use the same agreed subset of `../material/` as the RAG implementation.
