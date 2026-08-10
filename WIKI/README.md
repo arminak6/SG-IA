@@ -39,6 +39,54 @@ streamlit run frontend/app.py
 The frontend uses `http://127.0.0.1:8000` by default. Override it with the
 `LLM_WIKI_API_URL` environment variable when needed.
 
+## Run with Docker
+
+The WIKI Docker stack is independent from RAG and uses different host ports:
+
+- Streamlit UI: <http://localhost:8503>
+- FastAPI documentation: <http://localhost:8002/docs>
+
+To reuse the existing ignored `aws_credentials.json`, copy the environment
+template and select that file:
+
+```powershell
+cd WIKI
+Copy-Item .env.example .env
+```
+
+Then edit `.env` and set:
+
+```text
+WIKI_AWS_CREDENTIALS_FILE=./aws_credentials.json
+```
+
+Start the backend and UI:
+
+```powershell
+docker-compose up -d --build
+```
+
+Check them with:
+
+```powershell
+docker-compose ps
+docker-compose logs --tail 100 wiki-api
+```
+
+The host `backend/raw/` directory is mounted read-only and
+`backend/wiki/` is mounted read/write, so the container uses the same local
+documents and generated Markdown wiki as the non-Docker application. These
+private directories are excluded from the image build and from Git.
+
+Stop the WIKI stack without deleting the Docling model cache:
+
+```powershell
+docker-compose down
+```
+
+Docling conversion is local. The application calls Bedrock directly for model
+and embedding requests and does not upload source documents to S3.
+
 ## AWS configuration
 
 For local development, copy `aws_credentials.example.json` to

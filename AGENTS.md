@@ -95,9 +95,27 @@ when they are agreed.
   reports, local indexes/databases/models, caches, and editor state. Placeholder
   documentation keeps the intended data directories visible in a fresh clone.
 - `material/` contains the shared candidate corpus in several formats.
-- `RAG/` exists but is currently empty.
+- `RAG/` now has its first API-first ingestion/retrieval milestone. A FastAPI
+  backend accepts PDF, DOCX, PPTX, Markdown, text, CSV, and JSON uploads;
+  performs local ordered Docling extraction for binary office documents;
+  creates configurable structure-aware chunks; embeds them with configurable
+  Amazon Bedrock Titan Text Embeddings V2 (512 dimensions by default); and
+  verifies their storage in a Qdrant cosine collection before publishing an
+  indexed document manifest. Content-hash deduplication prevents identical
+  uploads from biasing retrieval.
+- `RAG/frontend/` is a strict HTTP client. Its Streamlit UI supports upload,
+  ingestion status, indexed-document inspection, and semantic retrieval debug
+  with scores/page/heading provenance. Grounded answer generation and `/chat`
+  remain the next RAG milestone.
+- `RAG/compose.yaml` independently starts Qdrant, FastAPI, and Streamlit with
+  persistent named volumes. The stack passed local container health checks on
+  2026-08-10; backend unit/API tests use fakes and make no AWS calls.
 - `WIKI/` already contains a FastAPI backend, Streamlit frontend, tests, and a
   persistent Markdown LLM Wiki proof of concept powered by AWS Bedrock.
+- `WIKI/compose.yaml` independently runs that existing backend and frontend on
+  host ports 8002 and 8503. It bind-mounts raw sources read-only and generated
+  Wiki content read/write, excludes both from image builds, and can run beside
+  the RAG Compose stack on 8001/8502.
 - `WIKI/backend/AGENTS.md` is the operating contract specifically for wiki
   ingestion and Q&A. It remains authoritative inside `WIKI/backend/` and must
   be read before changing that component.
@@ -182,7 +200,9 @@ depends on them, then update this file:
 
 - LLM Wiki vs Google OKF vs evaluating both for the WIKI approach.
 - Exact documents under `material/` that form the initial comparison corpus.
-- Models, embedding model, vector database, and chunking strategy for RAG.
+- RAG generation model, answer prompt/verification policy, and final `/chat`
+  response contract. The initial embedding/vector/chunking choices are already
+  recorded in `RAG/README.md`.
 - Model/provider and knowledge-generation pipeline for WIKI.
 - Common API request/response schema.
 - Final scoring weights and any expansion of the initial `test_QA/` benchmark.

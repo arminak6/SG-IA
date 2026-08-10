@@ -18,7 +18,7 @@ and diagnostics side by side.
 | Component | Status | Purpose |
 | --- | --- | --- |
 | `WIKI/` | Working proof of concept | FastAPI backend, persistent Markdown LLM Wiki, hybrid section search with full-page reading, Streamlit UI, ingestion, citations, linting, and tests |
-| `RAG/` | Planned | Independent RAG backend and Streamlit UI using the same source corpus |
+| `RAG/` | Ingestion/retrieval milestone working | FastAPI document API, local Docling extraction, Bedrock embeddings, Qdrant, Docker Compose, and an API-only Streamlit client |
 | `test_QA/` | Evaluation harness available | Shared semantic evaluation design and WIKI benchmark runner |
 | Final comparison UI | Planned | Send one question to both backends and compare the responses |
 
@@ -52,6 +52,7 @@ contain company information:
 - AWS credentials, `.env` files, and Streamlit secrets;
 - documents under `material/` and `WIKI/backend/raw/`;
 - generated Wiki pages under `WIKI/backend/wiki/`;
+- RAG uploads, Docling artifacts, job manifests, and Qdrant data;
 - the private ground-truth fixture and completed chatbot evaluations;
 - generated reports, local databases, indexes, model files, and caches.
 
@@ -82,10 +83,31 @@ streamlit run frontend/app.py
 Place approved local source documents in `WIKI/backend/raw/`, ingest them from
 the UI, and keep them outside Git.
 
+Alternatively, run the independent Docker stack:
+
+```powershell
+cd WIKI
+docker-compose up -d --build
+```
+
+The Docker WIKI UI is <http://localhost:8503> and its API documentation is
+<http://localhost:8002/docs>. See [`WIKI/README.md`](WIKI/README.md) for the
+ignored credential-file setting and bind-mounted data behavior.
+
 ## RAG quick start
 
-The RAG implementation has not been built yet. See [`RAG/README.md`](RAG/README.md)
-for its intended boundaries and the next implementation steps.
+The first RAG milestone supports document upload, asynchronous Docling
+ingestion, structure-aware chunks, Bedrock Titan embeddings, Qdrant retrieval,
+and retrieval inspection in Streamlit. From `RAG/`, copy `.env.example` to
+`.env`, configure temporary Bedrock credentials, and run:
+
+```powershell
+docker-compose up -d --build
+```
+
+Open Streamlit at <http://localhost:8502> and FastAPI documentation at
+<http://localhost:8001/docs>. Answer generation is the next milestone; see
+[`RAG/README.md`](RAG/README.md) for API details and privacy notes.
 
 ## Evaluation
 

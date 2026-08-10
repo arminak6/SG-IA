@@ -226,6 +226,17 @@ logic.
   English records are in the run directory and the standalone two-page report
   is `../output/pdf/SG-IA_WIKI_Two_Page_Executive_Summary_Hybrid_Section_V2.pdf`.
 
+### 2026-08-10: independent Docker UI stack
+
+- `compose.yaml` now runs the WIKI FastAPI backend and Streamlit API client
+  independently on host ports 8002 and 8503, so it can run beside RAG.
+- The existing local `backend/raw/` corpus is mounted read-only and
+  `backend/wiki/` is mounted read/write; neither private directory is copied
+  into the image. The ignored local Bedrock JSON can be selected through
+  `WIKI_AWS_CREDENTIALS_FILE`.
+- Docling uses a persistent Docker model-cache volume. The stack passed local
+  API/UI health checks while the RAG stack remained available on its ports.
+
 ## Data rules
 
 - Use the same agreed subset of `../material/` as the RAG implementation.

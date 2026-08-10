@@ -27,6 +27,10 @@
 /WIKI/backend/wiki/**
 !/WIKI/backend/wiki/.gitkeep
 
+# RAG uploads, extraction artifacts, job state, and document manifests.
+/RAG/data/**
+!/RAG/data/README.md
+
 # The real benchmark contains facts and evidence derived from the private corpus.
 /test_QA/mateial/**
 !/test_QA/mateial/README.md

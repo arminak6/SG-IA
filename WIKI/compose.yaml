@@ -1,0 +1,45 @@
+name: sgia-wiki
+
+services:
+  wiki-api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    init: true
+    environment:
+      AWS_REGION: ${AWS_REGION:-eu-central-1}
+      AWS_DEFAULT_REGION: ${AWS_REGION:-eu-central-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      BEDROCK_MODEL_ID: ${BEDROCK_MODEL_ID:-}
+      BEDROCK_EMBEDDING_MODEL_ID: ${BEDROCK_EMBEDDING_MODEL_ID:-amazon.titan-embed-text-v2:0}
+      BEDROCK_EMBEDDING_DIMENSIONS: ${BEDROCK_EMBEDDING_DIMENSIONS:-512}
+      LLM_WIKI_SEMANTIC_SEARCH_ENABLED: ${LLM_WIKI_SEMANTIC_SEARCH_ENABLED:-true}
+    ports:
+      - "${WIKI_API_PORT:-8002}:8000"
+    volumes:
+      - ./backend/raw:/app/WIKI/backend/raw:ro
+      - ./backend/wiki:/app/WIKI/backend/wiki
+      - ${WIKI_AWS_CREDENTIALS_FILE:-./aws_credentials.example.json}:/app/WIKI/aws_credentials.json:ro
+      - docling_model_cache:/root/.cache
+
+  wiki-ui:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    restart: unless-stopped
+    init: true
+    depends_on:
+      wiki-api:
+        condition: service_healthy
+    environment:
+      LLM_WIKI_API_URL: http://wiki-api:8000
+    ports:
+      - "${WIKI_UI_PORT:-8503}:8501"
+
+volumes:
+  docling_model_cache:
+    name: sgia_wiki_docling_model_cache
+

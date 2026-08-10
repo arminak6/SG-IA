@@ -1,0 +1,63 @@
+name: sgia-rag
+
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.18.0
+    restart: unless-stopped
+    ports:
+      - "${RAG_QDRANT_PORT:-6337}:6333"
+      - "${RAG_QDRANT_GRPC_PORT:-6338}:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+  rag-api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    init: true
+    depends_on:
+      qdrant:
+        condition: service_started
+    environment:
+      RAG_DATA_ROOT: /app/data
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-sgia_rag_chunks_titan_v2_512}
+      AWS_REGION: ${AWS_REGION:-eu-central-1}
+      AWS_DEFAULT_REGION: ${AWS_REGION:-eu-central-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      BEDROCK_EMBEDDING_MODEL_ID: ${BEDROCK_EMBEDDING_MODEL_ID:-amazon.titan-embed-text-v2:0}
+      BEDROCK_EMBEDDING_DIMENSIONS: ${BEDROCK_EMBEDDING_DIMENSIONS:-512}
+      RAG_CHUNK_MAX_TOKENS: ${RAG_CHUNK_MAX_TOKENS:-600}
+      RAG_CHUNK_OVERLAP_TOKENS: ${RAG_CHUNK_OVERLAP_TOKENS:-60}
+      RAG_MAX_UPLOAD_BYTES: ${RAG_MAX_UPLOAD_BYTES:-104857600}
+      DOCLING_DO_OCR: ${DOCLING_DO_OCR:-true}
+    ports:
+      - "${RAG_API_PORT:-8001}:8000"
+    volumes:
+      - rag_data:/app/data
+      - docling_model_cache:/root/.cache
+
+  rag-ui:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    restart: unless-stopped
+    init: true
+    depends_on:
+      rag-api:
+        condition: service_healthy
+    environment:
+      RAG_API_URL: http://rag-api:8000
+    ports:
+      - "${RAG_UI_PORT:-8502}:8501"
+
+volumes:
+  qdrant_data:
+    name: sgia_rag_qdrant_data
+  rag_data:
+    name: sgia_rag_data
+  docling_model_cache:
+    name: sgia_rag_docling_model_cache
