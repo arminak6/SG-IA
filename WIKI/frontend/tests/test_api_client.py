@@ -66,6 +66,7 @@ class WikiApiClientTests(unittest.TestCase):
                 "citations": [
                     {"wiki_path": "wiki/topic.md", "source_paths": ["raw/a.txt"]}
                 ],
+                "confidence_score": 8.7,
             }
         )
 
@@ -76,6 +77,15 @@ class WikiApiClientTests(unittest.TestCase):
             result.citations,
             ("wiki/topic.md (sources: raw/a.txt)",),
         )
+        self.assertEqual(result.confidence_score, 8.7)
+
+    def test_chat_rejects_out_of_range_confidence(self) -> None:
+        self.session.request.return_value = response(
+            {"answer": "The answer.", "citations": [], "confidence_score": 11}
+        )
+
+        with self.assertRaises(WikiApiError):
+            self.client.chat("What is it?")
 
     def test_connection_failure_has_a_clear_error(self) -> None:
         self.session.request.side_effect = requests.ConnectionError("offline")

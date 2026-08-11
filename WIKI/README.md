@@ -171,7 +171,24 @@ index, and manifest changes roll back together if a commit fails.
   validated bidirectional related-page links without permitting model-authored
   prose changes. `max_links` defaults to 12 and is capped at 50.
 - `POST /chat` returns a comparison-ready answer with structured citations,
-  status, usage, latency, model ID, and wiki navigation debug data.
+  status, usage, latency, model ID, an optional 0-10 evidence-confidence score,
+  and wiki navigation debug data.
+
+## Answer confidence
+
+After the answer agent submits a grounded response, an isolated Bedrock verifier
+checks the response against the complete cited Wiki pages. The final 0-10 score
+combines claim support (45%), question coverage (20%), lexical/semantic retrieval
+agreement (15%), source consistency (10%), and evidence quality/provenance (10%).
+An unsupported material claim caps an answered response at 5, and an unexplained
+source conflict subtracts 2 points.
+
+For an `insufficient_knowledge` response, the score instead measures confidence
+that abstaining was appropriate. The response text makes that target clear. The
+API returns the number as `confidence_score`, and Streamlit displays only
+`Confidence score: X.X/10` directly below the answer. If the supplementary
+verification pass fails, the grounded answer is preserved and
+`confidence_score` is `null` rather than turning the request into an error.
 
 ## Tests
 

@@ -300,6 +300,11 @@ def render_sidebar(
 def render_chat_message(message: dict[str, Any]) -> None:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
+        confidence_score = message.get("confidence_score")
+        if isinstance(confidence_score, (int, float)) and not isinstance(
+            confidence_score, bool
+        ):
+            st.markdown(f"**Confidence score: {float(confidence_score):.1f}/10**")
         citations = message.get("citations", [])
         if citations:
             st.caption("Sources")
@@ -417,6 +422,7 @@ if question := st.chat_input("Ask a question about your documents..."):
                 "role": "assistant",
                 "content": response.answer,
                 "citations": list(response.citations),
+                "confidence_score": response.confidence_score,
             }
         except WikiApiError as exc:
             assistant_message = {

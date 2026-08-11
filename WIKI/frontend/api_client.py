@@ -91,6 +91,7 @@ class UpdateResult:
 class ChatResponse:
     answer: str
     citations: tuple[str, ...]
+    confidence_score: float | None = None
 
 
 class WikiApiClient:
@@ -203,7 +204,19 @@ class WikiApiClient:
         citations = tuple(
             _format_citation(item) for item in _as_list(payload.get("citations", []))
         )
-        return ChatResponse(answer=payload["answer"], citations=citations)
+        raw_confidence = payload.get("confidence_score")
+        confidence_score: float | None = None
+        if raw_confidence is not None:
+            if isinstance(raw_confidence, bool) or not isinstance(raw_confidence, (int, float)):
+                raise WikiApiError("The backend returned an invalid confidence score.")
+            confidence_score = float(raw_confidence)
+            if not 0 <= confidence_score <= 10:
+                raise WikiApiError("The backend returned an invalid confidence score.")
+        return ChatResponse(
+            answer=payload["answer"],
+            citations=citations,
+            confidence_score=confidence_score,
+        )
 
     def _request(
         self,

@@ -63,6 +63,7 @@ class FakeService:
             "usage": {"inputTokens": 12, "outputTokens": 3},
             "latency_ms": 15.5,
             "model_id": "test-model",
+            "confidence_score": 8.7,
             "debug": {
                 "pages_read": ["sources/example.md"],
                 "search_queries": ["example"],
@@ -173,6 +174,7 @@ class ApiTests(unittest.TestCase):
     def test_chat_trims_question_and_returns_wiki_and_raw_citations(self) -> None:
         response = self.client.post("/chat", json={"question": "  What is this?  "})
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["confidence_score"], 8.7)
         self.assertEqual(self.service.questions, ["What is this?"])
         self.assertEqual(response.json()["answer"], "Grounded answer")
         payload = response.json()

@@ -105,6 +105,7 @@ class ChatResponse(ApiModel):
     usage: dict[str, int] = Field(default_factory=dict)
     latency_ms: float = Field(ge=0)
     model_id: Optional[str] = None
+    confidence_score: Optional[float] = Field(default=None, ge=0, le=10)
     debug: ChatDebugResponse = Field(default_factory=ChatDebugResponse)
 
 

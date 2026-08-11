@@ -287,6 +287,7 @@ def chat(request: ChatRequest, service: Any = Depends(get_service)) -> ChatRespo
             usage={str(key): int(value) for key, value in payload.get("usage", {}).items()},
             latency_ms=float(payload.get("latency_ms", 0)),
             model_id=payload.get("model_id"),
+            confidence_score=payload.get("confidence_score"),
             debug=payload.get("debug", {}),
         )
     except Exception as exc:

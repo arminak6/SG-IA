@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from functools import lru_cache
@@ -9,10 +10,14 @@ from typing import Sequence
 
 from .agent import WikiAgent, build_ingestion_prompt
 from .bedrock import BedrockConverseClient
+from .confidence import ConfidenceEvaluator
 from .config import BedrockSettings, load_settings
 from .embeddings import TitanEmbeddingClient
 from .repository import RepositoryError, WikiRepository
 from .search import HybridWikiSearch
+
+
+logger = logging.getLogger(__name__)
 
 
 class WikiService:
@@ -26,6 +31,7 @@ class WikiService:
         bedrock: BedrockConverseClient | None = None,
         agent: WikiAgent | None = None,
         searcher: HybridWikiSearch | None = None,
+        confidence_evaluator: ConfidenceEvaluator | None = None,
     ) -> None:
         self.settings = settings or load_settings()
         self.repository = repository or WikiRepository(
@@ -36,6 +42,7 @@ class WikiService:
         self._bedrock = bedrock
         self._agent = agent
         self._searcher = searcher
+        self._confidence_evaluator = confidence_evaluator
         self._update_lock = threading.Lock()
 
     @property
@@ -65,6 +72,12 @@ class WikiService:
                 searcher=self.searcher,
             )
         return self._agent
+
+    @property
+    def confidence_evaluator(self) -> ConfidenceEvaluator:
+        if self._confidence_evaluator is None:
+            self._confidence_evaluator = ConfidenceEvaluator(self.repository, self.bedrock)
+        return self._confidence_evaluator
 
     def health(self) -> dict[str, object]:
         documents = self.repository.list_raw_documents()
@@ -209,11 +222,24 @@ class WikiService:
             # Logging is observability; it must not discard an already grounded answer.
             pass
         response = result.to_dict()
+        confidence_score: float | None = None
+        try:
+            confidence = self.confidence_evaluator.evaluate(question, result)
+            confidence_score = confidence.score
+            usage = response.setdefault("usage", {})
+            if isinstance(usage, dict):
+                for key, value in confidence.usage.items():
+                    usage[key] = int(usage.get(key, 0)) + int(value)
+        except Exception as exc:
+            # Confidence is supplementary metadata. A verifier outage or malformed
+            # verifier response must never discard an already-grounded answer.
+            logger.warning("Confidence evaluation unavailable (%s)", type(exc).__name__)
         response.update(
             {
                 "approach": "wiki",
                 "model_id": self.settings.bedrock_model_id,
                 "latency_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                "confidence_score": confidence_score,
             }
         )
         return response

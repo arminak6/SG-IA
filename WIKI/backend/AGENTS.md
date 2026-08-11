@@ -87,6 +87,8 @@ because it was read; it must be integrated into the persistent wiki.
 3. Cite the wiki pages used and retain their raw-source provenance.
 4. If the wiki lacks enough evidence, say what is missing instead of guessing.
 5. Distinguish direct source claims from your synthesis.
+6. Do not state or estimate confidence in the answer text. The application
+   calculates the final confidence score in a separate evidence-verification pass.
 
 ## Maintenance checks
 

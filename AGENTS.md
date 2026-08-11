@@ -148,6 +148,14 @@ when they are agreed.
   remains the direct Hybrid flow without the evidence-first ledger/verifier.
   API debug data exposes lexical/semantic ranks, selected parent pages, and
   matched sections for evaluation.
+- WIKI chat responses now include an optional 0-10 evidence-confidence score.
+  A separate post-answer Bedrock verification pass checks the answer against
+  its complete cited Wiki pages and combines claim support, question coverage,
+  lexical/semantic retrieval agreement, source consistency, and evidence
+  quality/provenance. Unsupported material claims and unexplained conflicts
+  constrain the result; for insufficient-knowledge responses the score targets
+  confidence in the abstention. Verification failures are non-fatal, and the
+  WIKI Streamlit UI displays only the final score below the answer.
 - `test_QA/mateial/ground_truth_qa.json` is the initial shared evaluation fixture: 25
   Italian questions grounded in the WIKI raw corpus, with required answer
   points, source locators, evidence, and two insufficient-knowledge controls.

@@ -6,9 +6,15 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from backend.app.agent import AgentValidationError, IngestionResult, WikiAgent
+from backend.app.agent import (
+    AgentValidationError,
+    AnswerResult,
+    IngestionResult,
+    WikiAgent,
+)
 from backend.app.bedrock import BedrockConverseClient, BedrockError, ConverseTurn
 from backend.app.config import BedrockSettings, load_settings
+from backend.app.confidence import ConfidenceEvaluation
 from backend.app.repository import RepositoryError, UnsafePathError, WikiRepository
 from backend.app.service import WikiService
 
@@ -23,6 +29,19 @@ class ScriptedBedrock:
         if not self.turns:
             raise AssertionError("Unexpected Bedrock call")
         return self.turns.pop(0)
+
+
+class StaticConfidenceEvaluator:
+    def evaluate(self, question, result):
+        return ConfidenceEvaluation(
+            score=8.6,
+            usage={"inputTokens": 2, "outputTokens": 1},
+        )
+
+
+class BrokenConfidenceEvaluator:
+    def evaluate(self, question, result):
+        raise RuntimeError("verification unavailable")
 
 
 def assistant_turn(*content: dict[str, object]) -> ConverseTurn:
@@ -61,6 +80,34 @@ sources:
 
 
 class CoreTests(unittest.TestCase):
+    def test_confidence_failure_does_not_discard_grounded_answer(self) -> None:
+        class AnsweringAgent:
+            def answer(self, question):
+                return AnswerResult(
+                    status="answered",
+                    answer="Grounded answer",
+                    citations=(),
+                    usage={"inputTokens": 3},
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = BedrockSettings(
+                project_root=Path(temp_dir),
+                region_name="eu-west-1",
+                bedrock_model_id="test-model",
+            )
+            service = WikiService(
+                settings,
+                agent=AnsweringAgent(),
+                confidence_evaluator=BrokenConfidenceEvaluator(),
+            )
+
+            with self.assertLogs("backend.app.service", level="WARNING"):
+                answer = service.ask("Question")
+
+        self.assertEqual(answer["answer"], "Grounded answer")
+        self.assertIsNone(answer["confidence_score"])
+
     def test_index_ownership_is_unambiguous_and_step_default_is_24(self) -> None:
         schema = (Path(__file__).parents[1] / "AGENTS.md").read_text(encoding="utf-8-sig")
         settings = BedrockSettings(
@@ -785,7 +832,12 @@ The source says the answer is 42.
             repository = WikiRepository(backend_root)
             scripted_bedrock = ScriptedBedrock(turns)
             agent = WikiAgent(repository, scripted_bedrock, max_steps=8)
-            service = WikiService(settings, repository=repository, agent=agent)
+            service = WikiService(
+                settings,
+                repository=repository,
+                agent=agent,
+                confidence_evaluator=StaticConfidenceEvaluator(),
+            )
 
             before = service.list_documents()
             update = service.update_wiki(["article.txt"])
@@ -803,6 +855,8 @@ The source says the answer is 42.
             self.assertTrue((backend_root / "wiki" / "index.md").is_file())
             self.assertIn("Status: success", (backend_root / "wiki" / "log.md").read_text())
             self.assertEqual(answer["answer"], "The answer is 42.")
+            self.assertEqual(answer["confidence_score"], 8.6)
+            self.assertEqual(answer["usage"]["inputTokens"], 22)
             self.assertEqual(answer["citations"][0]["source_paths"], ["raw/article.txt"])
             first_user_text = scripted_bedrock.calls[0]["messages"][0]["content"][0]["text"]
             self.assertEqual(first_user_text, "Ingest raw/article.txt into the wiki.")
