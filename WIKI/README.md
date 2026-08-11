@@ -186,9 +186,23 @@ source conflict subtracts 2 points.
 For an `insufficient_knowledge` response, the score instead measures confidence
 that abstaining was appropriate. The response text makes that target clear. The
 API returns the number as `confidence_score`, and Streamlit displays only
-`Confidence score: X.X/10` directly below the answer. If the supplementary
-verification pass fails, the grounded answer is preserved and
-`confidence_score` is `null` rather than turning the request into an error.
+`Confidence score: X.X/10` directly below the answer.
+
+The same verifier is an enforced evidence guardrail. A proposed factual answer
+is replaced with `insufficient_knowledge` when it contains an unsupported
+material claim, has claim support below 0.8, covers less than 0.7 of the
+question, has evidence quality below 0.6, or leaves a source conflict
+unexplained. Retrieval agreement contributes to confidence but is not a hard
+gate because lexical-only operation and semantic-search outages remain valid
+operating modes.
+
+Every abstention is reduced to a fixed, concise English or Italian message, and
+citations are removed so loosely related pages cannot appear as answer evidence.
+Consulted pages remain available in `debug.pages_read`, while
+`debug.guardrail` reports whether the gate was applied, the original status,
+verification availability, and stable reason codes. If semantic verification
+fails, the API fails closed to the same citation-free abstention with a null
+score instead of returning an unverified factual answer or a 503.
 
 ## Tests
 

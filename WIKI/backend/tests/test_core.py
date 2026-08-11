@@ -9,6 +9,7 @@ from unittest.mock import patch
 from backend.app.agent import (
     AgentValidationError,
     AnswerResult,
+    Citation,
     IngestionResult,
     WikiAgent,
 )
@@ -36,12 +37,39 @@ class StaticConfidenceEvaluator:
         return ConfidenceEvaluation(
             score=8.6,
             usage={"inputTokens": 2, "outputTokens": 1},
+            claim_support=1.0,
+            question_coverage=1.0,
+            source_consistency=1.0,
+            evidence_quality=1.0,
+            abstention_score=1.0,
+            has_unsupported_material_claim=False,
+            has_unexplained_conflict=False,
+            response_language="english",
         )
 
 
 class BrokenConfidenceEvaluator:
     def evaluate(self, question, result):
         raise RuntimeError("verification unavailable")
+
+
+class RejectingConfidenceEvaluator:
+    def __init__(self, *, language="english"):
+        self.language = language
+
+    def evaluate(self, question, result):
+        return ConfidenceEvaluation(
+            score=9.3 if result.status == "insufficient_knowledge" else 4.0,
+            usage={"inputTokens": 2, "outputTokens": 1},
+            claim_support=0.4,
+            question_coverage=0.9,
+            source_consistency=1.0,
+            evidence_quality=0.8,
+            abstention_score=9.3,
+            has_unsupported_material_claim=True,
+            has_unexplained_conflict=False,
+            response_language=self.language,
+        )
 
 
 def assistant_turn(*content: dict[str, object]) -> ConverseTurn:
@@ -80,7 +108,7 @@ sources:
 
 
 class CoreTests(unittest.TestCase):
-    def test_confidence_failure_does_not_discard_grounded_answer(self) -> None:
+    def test_confidence_failure_fails_closed_without_service_error(self) -> None:
         class AnsweringAgent:
             def answer(self, question):
                 return AnswerResult(
@@ -105,8 +133,77 @@ class CoreTests(unittest.TestCase):
             with self.assertLogs("backend.app.service", level="WARNING"):
                 answer = service.ask("Question")
 
-        self.assertEqual(answer["answer"], "Grounded answer")
+        self.assertEqual(answer["status"], "insufficient_knowledge")
+        self.assertIn("only answer from the available Wiki documents", answer["answer"])
+        self.assertEqual(answer["citations"], [])
         self.assertIsNone(answer["confidence_score"])
+        self.assertEqual(
+            answer["debug"]["guardrail"]["reasons"],
+            ["verification_unavailable"],
+        )
+
+    def test_unsupported_answer_is_replaced_and_citations_are_removed(self) -> None:
+        class AnsweringAgent:
+            def answer(self, question):
+                return AnswerResult(
+                    status="answered",
+                    answer="An unsupported general-knowledge answer.",
+                    citations=(Citation("concepts/example.md", ("raw/example.txt",)),),
+                    usage={},
+                    pages_read=("concepts/example.md",),
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = BedrockSettings(
+                project_root=Path(temp_dir),
+                region_name="eu-west-1",
+                bedrock_model_id="test-model",
+            )
+            service = WikiService(
+                settings,
+                agent=AnsweringAgent(),
+                confidence_evaluator=RejectingConfidenceEvaluator(),
+            )
+            answer = service.ask("General question")
+
+        self.assertEqual(answer["status"], "insufficient_knowledge")
+        self.assertNotIn("general-knowledge", answer["answer"])
+        self.assertEqual(answer["citations"], [])
+        self.assertEqual(answer["confidence_score"], 9.3)
+        self.assertTrue(answer["debug"]["guardrail"]["applied"])
+        self.assertIn(
+            "unsupported_material_claim",
+            answer["debug"]["guardrail"]["reasons"],
+        )
+
+    def test_existing_abstention_is_sanitized_in_question_language(self) -> None:
+        class AbstainingAgent:
+            def answer(self, question):
+                return AnswerResult(
+                    status="insufficient_knowledge",
+                    answer="Non lo so, ma una pagina ha una data non pertinente.",
+                    citations=(Citation("concepts/example.md", ("raw/example.txt",)),),
+                    usage={},
+                    pages_read=("concepts/example.md",),
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = BedrockSettings(
+                project_root=Path(temp_dir),
+                region_name="eu-west-1",
+                bedrock_model_id="test-model",
+            )
+            service = WikiService(
+                settings,
+                agent=AbstainingAgent(),
+                confidence_evaluator=RejectingConfidenceEvaluator(language="italian"),
+            )
+            answer = service.ask("Qual è la data di oggi?")
+
+        self.assertEqual(answer["status"], "insufficient_knowledge")
+        self.assertTrue(answer["answer"].startswith("Posso rispondere solo"))
+        self.assertNotIn("data non pertinente", answer["answer"])
+        self.assertEqual(answer["citations"], [])
 
     def test_index_ownership_is_unambiguous_and_step_default_is_24(self) -> None:
         schema = (Path(__file__).parents[1] / "AGENTS.md").read_text(encoding="utf-8-sig")

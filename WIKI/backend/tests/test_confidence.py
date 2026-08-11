@@ -49,6 +49,7 @@ def confidence_turn(
                             "abstention_appropriateness": 0.0,
                             "has_unsupported_material_claim": unsupported,
                             "has_unexplained_conflict": conflict,
+                            "response_language": "english",
                         },
                     }
                 }

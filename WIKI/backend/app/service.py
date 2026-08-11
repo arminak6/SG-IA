@@ -10,7 +10,7 @@ from typing import Sequence
 
 from .agent import WikiAgent, build_ingestion_prompt
 from .bedrock import BedrockConverseClient
-from .confidence import ConfidenceEvaluator
+from .confidence import ConfidenceEvaluation, ConfidenceEvaluator
 from .config import BedrockSettings, load_settings
 from .embeddings import TitanEmbeddingClient
 from .repository import RepositoryError, WikiRepository
@@ -211,29 +211,52 @@ class WikiService:
             except RepositoryError:
                 pass
             raise
-        try:
-            self.repository.append_log(
-                "query",
-                question,
-                status=result.status,
-                pages=(citation.wiki_path for citation in result.citations),
-            )
-        except RepositoryError:
-            # Logging is observability; it must not discard an already grounded answer.
-            pass
         response = result.to_dict()
         confidence_score: float | None = None
+        confidence: ConfidenceEvaluation | None = None
+        verification_available = False
         try:
             confidence = self.confidence_evaluator.evaluate(question, result)
+            verification_available = True
             confidence_score = confidence.score
             usage = response.setdefault("usage", {})
             if isinstance(usage, dict):
                 for key, value in confidence.usage.items():
                     usage[key] = int(usage.get(key, 0)) + int(value)
         except Exception as exc:
-            # Confidence is supplementary metadata. A verifier outage or malformed
-            # verifier response must never discard an already-grounded answer.
             logger.warning("Confidence evaluation unavailable (%s)", type(exc).__name__)
+
+        guardrail_reasons: tuple[str, ...]
+        if result.status == "insufficient_knowledge":
+            guardrail_reasons = ("answer_agent_abstained",)
+        elif confidence is None:
+            # A factual response cannot pass a semantic evidence gate when its
+            # evidence verification is unavailable. Fail closed without a 503.
+            guardrail_reasons = ("verification_unavailable",)
+        else:
+            guardrail_reasons = confidence.answer_guardrail_reasons()
+
+        guardrail_applied = bool(guardrail_reasons)
+        if guardrail_applied:
+            language = confidence.response_language if confidence is not None else "other"
+            response.update(
+                {
+                    "status": "insufficient_knowledge",
+                    "answer": self._insufficient_knowledge_message(language),
+                    "citations": [],
+                }
+            )
+            if result.status == "answered" and confidence is not None:
+                confidence_score = confidence.abstention_score
+
+        debug = response.setdefault("debug", {})
+        if isinstance(debug, dict):
+            debug["guardrail"] = {
+                "applied": guardrail_applied,
+                "original_status": result.status,
+                "verification_available": verification_available,
+                "reasons": list(guardrail_reasons),
+            }
         response.update(
             {
                 "approach": "wiki",
@@ -242,7 +265,41 @@ class WikiService:
                 "confidence_score": confidence_score,
             }
         )
+
+        final_citations = response.get("citations", [])
+        logged_pages = [
+            str(item.get("wiki_path"))
+            for item in final_citations
+            if isinstance(item, dict) and item.get("wiki_path")
+        ] if isinstance(final_citations, list) else []
+        try:
+            self.repository.append_log(
+                "query",
+                question,
+                status=str(response.get("status", result.status)),
+                pages=logged_pages,
+                detail=(
+                    f"Evidence guardrail: {', '.join(guardrail_reasons)}"
+                    if guardrail_applied
+                    else None
+                ),
+            )
+        except RepositoryError:
+            # Logging is observability; it must not discard an already-grounded answer.
+            pass
         return response
+
+    @staticmethod
+    def _insufficient_knowledge_message(language: str) -> str:
+        if language == "italian":
+            return (
+                "Posso rispondere solo in base ai documenti Wiki disponibili, che non "
+                "contengono informazioni sufficienti per rispondere a questa domanda."
+            )
+        return (
+            "I can only answer from the available Wiki documents, and they do not "
+            "contain enough evidence to answer this question."
+        )
 
     def lint_wiki(self) -> dict[str, object]:
         return self.repository.lint_wiki()

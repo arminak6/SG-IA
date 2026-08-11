@@ -22,6 +22,30 @@ class ConfidenceEvaluation:
 
     score: float
     usage: dict[str, int]
+    claim_support: float
+    question_coverage: float
+    source_consistency: float
+    evidence_quality: float
+    abstention_score: float
+    has_unsupported_material_claim: bool
+    has_unexplained_conflict: bool
+    response_language: str
+
+    def answer_guardrail_reasons(self) -> tuple[str, ...]:
+        """Return stable reason codes when a proposed factual answer must be blocked."""
+
+        reasons: list[str] = []
+        if self.has_unsupported_material_claim:
+            reasons.append("unsupported_material_claim")
+        if self.claim_support < 0.8:
+            reasons.append("weak_claim_support")
+        if self.question_coverage < 0.7:
+            reasons.append("incomplete_question_coverage")
+        if self.evidence_quality < 0.6:
+            reasons.append("weak_evidence_quality")
+        if self.has_unexplained_conflict:
+            reasons.append("unexplained_source_conflict")
+        return tuple(reasons)
 
 
 CONFIDENCE_TOOL = {
@@ -57,6 +81,10 @@ CONFIDENCE_TOOL = {
                     },
                     "has_unsupported_material_claim": {"type": "boolean"},
                     "has_unexplained_conflict": {"type": "boolean"},
+                    "response_language": {
+                        "type": "string",
+                        "enum": ["english", "italian", "other"],
+                    },
                 },
                 "required": [
                     "claim_support",
@@ -84,10 +112,12 @@ Return every normalized score from 0 to 1 by calling submit_confidence_evaluatio
 - question_coverage: fraction of the user's requested aspects answered with evidence.
 - source_consistency: 1 when the evidence agrees; lower it for unresolved contradictions.
 - evidence_quality: directness and clarity of the evidence, including visible raw-source provenance.
-- abstention_appropriateness: for insufficient_knowledge, confidence that abstaining is correct; for an
-  answered response, use 0.
+- abstention_appropriateness: confidence that refusing to provide a factual answer would be appropriate,
+  regardless of the submitted status. Use a high value when the evidence does not directly answer the
+  question and a low value when it clearly does.
 - has_unsupported_material_claim: true if any important factual claim lacks support.
 - has_unexplained_conflict: true if the answer hides or fails to resolve conflicting evidence.
+- response_language: classify the user's question as english, italian, or other. Do not translate evidence.
 
 Do not output prose and do not estimate confidence from writing style or model fluency.
 """
@@ -110,7 +140,18 @@ class ConfidenceEvaluator:
         # With no knowledge pages, an insufficient-knowledge response is a fully
         # deterministic and appropriate abstention; no model call is useful.
         if result.status == "insufficient_knowledge" and not self.repository.list_wiki_pages():
-            return ConfidenceEvaluation(score=10.0, usage={})
+            return ConfidenceEvaluation(
+                score=10.0,
+                usage={},
+                claim_support=0.0,
+                question_coverage=0.0,
+                source_consistency=1.0,
+                evidence_quality=0.0,
+                abstention_score=10.0,
+                has_unsupported_material_claim=False,
+                has_unexplained_conflict=False,
+                response_language="other",
+            )
 
         evidence_paths = self._evidence_paths(result)
         evidence = self._read_evidence(evidence_paths)
@@ -151,8 +192,7 @@ class ConfidenceEvaluator:
             self._add_usage(usage, turn)
             submissions = self._submissions(turn)
             if len(submissions) == 1:
-                score = self._calculate_score(result, submissions[0])
-                return ConfidenceEvaluation(score=score, usage=usage)
+                return self._evaluation(result, submissions[0], usage)
             if attempt == 0:
                 messages.append(turn.message)
                 messages.append(
@@ -227,33 +267,70 @@ class ConfidenceEvaluator:
             raise ConfidenceEvaluationError(f"Confidence flag '{key}' is invalid.")
         return value
 
-    def _calculate_score(
+    @staticmethod
+    def _language(inputs: Mapping[str, Any]) -> str:
+        value = inputs.get("response_language", "other")
+        if value not in {"english", "italian", "other"}:
+            raise ConfidenceEvaluationError("Confidence response language is invalid.")
+        return str(value)
+
+    def _evaluation(
         self,
         result: AnswerResult,
         inputs: Mapping[str, Any],
-    ) -> float:
-        consistency = self._normalized(inputs, "source_consistency")
-        if result.status == "insufficient_knowledge":
-            abstention = self._normalized(inputs, "abstention_appropriateness")
-            due_diligence = self._retrieval_due_diligence(result)
-            score = 10 * (0.75 * abstention + 0.15 * due_diligence + 0.10 * consistency)
-            return self._round_score(score)
-
+        usage: Mapping[str, int],
+    ) -> ConfidenceEvaluation:
         claim_support = self._normalized(inputs, "claim_support")
         question_coverage = self._normalized(inputs, "question_coverage")
+        consistency = self._normalized(inputs, "source_consistency")
         evidence_quality = self._normalized(inputs, "evidence_quality")
-        retrieval_agreement = self._retrieval_agreement(result)
-        score = 10 * (
-            0.45 * claim_support
-            + 0.20 * question_coverage
-            + 0.15 * retrieval_agreement
-            + 0.10 * consistency
-            + 0.10 * evidence_quality
+        abstention = self._normalized(inputs, "abstention_appropriateness")
+        unsupported = self._boolean(inputs, "has_unsupported_material_claim")
+        conflict = self._boolean(inputs, "has_unexplained_conflict")
+        abstention_score = self._abstention_score(result, abstention, consistency)
+
+        if result.status == "insufficient_knowledge":
+            score = abstention_score
+        else:
+            retrieval_agreement = self._retrieval_agreement(result)
+            score = 10 * (
+                0.45 * claim_support
+                + 0.20 * question_coverage
+                + 0.15 * retrieval_agreement
+                + 0.10 * consistency
+                + 0.10 * evidence_quality
+            )
+            if unsupported:
+                score = min(score, 5.0)
+            if conflict:
+                score -= 2.0
+            score = self._round_score(score)
+
+        return ConfidenceEvaluation(
+            score=score,
+            usage={str(key): int(value) for key, value in usage.items()},
+            claim_support=claim_support,
+            question_coverage=question_coverage,
+            source_consistency=consistency,
+            evidence_quality=evidence_quality,
+            abstention_score=abstention_score,
+            has_unsupported_material_claim=unsupported,
+            has_unexplained_conflict=conflict,
+            response_language=self._language(inputs),
         )
-        if self._boolean(inputs, "has_unsupported_material_claim"):
-            score = min(score, 5.0)
-        if self._boolean(inputs, "has_unexplained_conflict"):
-            score -= 2.0
+
+    def _abstention_score(
+        self,
+        result: AnswerResult,
+        abstention_appropriateness: float,
+        source_consistency: float,
+    ) -> float:
+        due_diligence = self._retrieval_due_diligence(result)
+        score = 10 * (
+            0.75 * abstention_appropriateness
+            + 0.15 * due_diligence
+            + 0.10 * source_consistency
+        )
         return self._round_score(score)
 
     @staticmethod

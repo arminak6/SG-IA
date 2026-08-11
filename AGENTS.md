@@ -154,8 +154,13 @@ when they are agreed.
   lexical/semantic retrieval agreement, source consistency, and evidence
   quality/provenance. Unsupported material claims and unexplained conflicts
   constrain the result; for insufficient-knowledge responses the score targets
-  confidence in the abstention. Verification failures are non-fatal, and the
-  WIKI Streamlit UI displays only the final score below the answer.
+  confidence in the abstention. The verifier also enforces a fail-closed
+  evidence guardrail: unsupported, weakly supported, materially incomplete, or
+  unexplained-conflict answers become a fixed citation-free
+  `insufficient_knowledge` response; verifier failures do the same without
+  producing a 503. Consulted pages and stable guardrail reasons remain in API
+  debug metadata, while the WIKI Streamlit UI displays only the final score
+  below the answer.
 - `test_QA/mateial/ground_truth_qa.json` is the initial shared evaluation fixture: 25
   Italian questions grounded in the WIKI raw corpus, with required answer
   points, source locators, evidence, and two insufficient-knowledge controls.

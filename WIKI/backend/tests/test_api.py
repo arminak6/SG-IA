@@ -67,6 +67,12 @@ class FakeService:
             "debug": {
                 "pages_read": ["sources/example.md"],
                 "search_queries": ["example"],
+                "guardrail": {
+                    "applied": False,
+                    "original_status": "answered",
+                    "verification_available": True,
+                    "reasons": [],
+                },
             },
         }
 
@@ -175,6 +181,7 @@ class ApiTests(unittest.TestCase):
         response = self.client.post("/chat", json={"question": "  What is this?  "})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["confidence_score"], 8.7)
+        self.assertFalse(response.json()["debug"]["guardrail"]["applied"])
         self.assertEqual(self.service.questions, ["What is this?"])
         self.assertEqual(response.json()["answer"], "Grounded answer")
         payload = response.json()

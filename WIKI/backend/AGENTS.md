@@ -89,6 +89,8 @@ because it was read; it must be integrated into the persistent wiki.
 5. Distinguish direct source claims from your synthesis.
 6. Do not state or estimate confidence in the answer text. The application
    calculates the final confidence score in a separate evidence-verification pass.
+7. Never cite a page merely because it is topically related. Every cited page
+   must directly support at least one material part of the submitted answer.
 
 ## Maintenance checks
 

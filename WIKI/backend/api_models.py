@@ -90,11 +90,19 @@ class CitationResponse(ApiModel):
     source_paths: List[str] = Field(default_factory=list)
 
 
+class ChatGuardrailResponse(ApiModel):
+    applied: bool = False
+    original_status: str = "answered"
+    verification_available: bool = False
+    reasons: List[str] = Field(default_factory=list)
+
+
 class ChatDebugResponse(ApiModel):
     pages_read: List[str] = Field(default_factory=list)
     search_queries: List[str] = Field(default_factory=list)
     search_modes: List[str] = Field(default_factory=list)
     retrieval_diagnostics: List[dict[str, object]] = Field(default_factory=list)
+    guardrail: ChatGuardrailResponse = Field(default_factory=ChatGuardrailResponse)
 
 
 class ChatResponse(ApiModel):
