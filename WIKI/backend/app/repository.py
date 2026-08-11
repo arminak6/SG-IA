@@ -92,9 +92,11 @@ class WikiSearchResult:
 class WikiRepository:
     """Restrict all filesystem access to ``backend/raw`` and ``backend/wiki``.
 
-    There is intentionally no raw write method.  Wiki writes accept Markdown
-    only, validate containment after symlink resolution, and use ``os.replace``
-    so readers see either the old complete file or the new complete file.
+    The only raw write operation creates a new immutable Markdown file in the
+    dedicated manager-actions directory after application confirmation.
+    Wiki writes accept Markdown only, validate containment after symlink
+    resolution, and use ``os.replace`` so readers see either the old complete
+    file or the new complete file.
     """
 
     SYSTEM_PAGES = frozenset({"index.md", "log.md"})
@@ -113,6 +115,8 @@ class WikiRepository:
     TEXT_SOURCE_SUFFIXES = frozenset({".md", ".markdown", ".txt", ".json", ".csv"})
     BINARY_SOURCE_SUFFIXES = DoclingDocumentExtractor.SUPPORTED_SUFFIXES
     SOURCE_SUFFIXES = TEXT_SOURCE_SUFFIXES | BINARY_SOURCE_SUFFIXES
+    MANAGER_ACTIONS_DIR = "manager-actions"
+    MANAGER_CORRECTIONS_DIR = MANAGER_ACTIONS_DIR
 
     def __init__(
         self,
@@ -258,6 +262,39 @@ class WikiRepository:
         except RepositoryError:
             return False
         return True
+
+    def create_manager_action_source(self, filename: str, content: str) -> str:
+        """Create one immutable, application-authored manager knowledge source."""
+
+        relative_name = self._normalize_relative(filename)
+        if len(PurePosixPath(relative_name).parts) != 1:
+            raise UnsafePathError("Manager action filename cannot contain directories.")
+        if PurePosixPath(relative_name).suffix.casefold() != ".md":
+            raise UnsafePathError("Manager action sources must be Markdown files.")
+        if not isinstance(content, str) or not content.strip():
+            raise RepositoryError("Manager action source content cannot be empty.")
+        if len(content) > self.max_extracted_characters:
+            raise RepositoryError("Manager action source exceeds the text safety limit.")
+
+        action_root = self._contained_path(self.raw_root, self.MANAGER_ACTIONS_DIR)
+        target = self._contained_path(action_root, relative_name)
+        try:
+            action_root.mkdir(parents=True, exist_ok=True)
+            with target.open("x", encoding="utf-8", newline="\n") as handle:
+                handle.write(content.rstrip() + "\n")
+        except FileExistsError as exc:
+            raise RepositoryError("Manager action source already exists.") from exc
+        except OSError as exc:
+            raise RepositoryError(
+                "Could not create the manager action source. Check the writable "
+                "manager-actions mount."
+            ) from exc
+        return f"raw/{self.MANAGER_ACTIONS_DIR}/{relative_name}"
+
+    def create_manager_correction_source(self, filename: str, content: str) -> str:
+        """Backward-compatible alias for the manager-action source writer."""
+
+        return self.create_manager_action_source(filename, content)
 
     def source_digest(self, source_path: str) -> str:
         """Return a content hash so an edited source becomes pending again."""
@@ -965,6 +1002,90 @@ class WikiRepository:
                 applied_pairs.append({"source_path": source, "target_path": target})
         pages_written = self.write_wiki_pages(updated_pages) if updated_pages else []
         return {"pairs_added": applied_pairs, "pages_updated": pages_written}
+
+    def apply_answer_fix_guidance(
+        self,
+        *,
+        action_id: str,
+        target_page: str,
+        subject: str,
+        guidance: str,
+        evidence_pages: Sequence[str],
+    ) -> list[str]:
+        """Integrate verified answer guidance into an existing graph page.
+
+        This changes only the derived Wiki representation. It preserves the
+        complete page, adds all evidence provenance, and links the target page
+        to every supporting page. No raw source is created.
+        """
+
+        target = self.normalize_wiki_path(target_page, allow_system=False)
+        evidence = [
+            self.normalize_wiki_path(path, allow_system=False)
+            for path in evidence_pages
+        ]
+        if target not in evidence:
+            raise RepositoryError("Answer-fix target must be one of its evidence pages.")
+        content = self.read_wiki_page(target)
+        marker = f"<!-- manager-answer-fix:{action_id} -->"
+        if marker in content:
+            return []
+
+        all_sources = set(self.page_source_paths(target, content=content))
+        for page in evidence:
+            all_sources.update(self.page_source_paths(page))
+        frontmatter_end = content.find("\n---\n", 4)
+        if not content.startswith("---\n") or frontmatter_end < 0:
+            raise RepositoryError("Wiki page frontmatter is invalid.")
+        metadata = yaml.safe_load(content[4:frontmatter_end])
+        if not isinstance(metadata, dict):
+            raise RepositoryError("Wiki page frontmatter must be a YAML object.")
+        body = content[frontmatter_end + 5 :]
+        metadata["updated"] = date.today().isoformat()
+        metadata["sources"] = sorted(all_sources, key=str.casefold)
+        rendered_frontmatter = yaml.safe_dump(
+            metadata,
+            allow_unicode=True,
+            sort_keys=False,
+            default_flow_style=False,
+        ).strip()
+        body = body.strip()
+
+        related_lines: list[str] = []
+        for page in sorted(set(evidence), key=str.casefold):
+            if page == target:
+                continue
+            title = self._title(self.read_wiki_page(page), page)
+            related_lines.append(self._related_link_line(target, page, title))
+        related_text = "\n".join(related_lines)
+        safe_subject = re.sub(r"\s+", " ", subject).strip()
+        safe_guidance = guidance.strip()
+        section = (
+            f"## Manager-reviewed guidance: {safe_subject}\n\n"
+            f"{marker}\n\n{safe_guidance}"
+        )
+        if related_text:
+            section += f"\n\nSupporting Wiki pages:\n\n{related_text}"
+
+        sources_heading = re.search(r"^## Sources\s*$", body, flags=re.MULTILINE)
+        if not sources_heading:
+            raise RepositoryError(f"Wiki page has no Sources section: {target}")
+        before_sources = body[: sources_heading.start()].rstrip()
+        sources_section = "## Sources\n\n" + "\n".join(
+            f"- {source}" for source in sorted(all_sources, key=str.casefold)
+        )
+        updated = (
+            f"---\n{rendered_frontmatter}\n---\n\n"
+            f"{before_sources}\n\n{section}\n\n{sources_section}\n"
+        )
+        written = self.write_wiki_pages({target: updated})
+        link_pairs = [(target, page) for page in evidence if page != target]
+        if link_pairs:
+            linked = self.apply_cross_links(link_pairs, bidirectional=True)
+            for page in linked.get("pages_updated", []):
+                if isinstance(page, str) and page not in written:
+                    written.append(page)
+        return sorted(written, key=str.casefold)
 
     def lint_wiki(self) -> dict[str, object]:
         """Run deterministic schema, provenance, link, and index checks."""

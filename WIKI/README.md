@@ -73,10 +73,10 @@ docker-compose ps
 docker-compose logs --tail 100 wiki-api
 ```
 
-The host `backend/raw/` directory is mounted read-only and
-`backend/wiki/` is mounted read/write, so the container uses the same local
-documents and generated Markdown wiki as the non-Docker application. These
-private directories are excluded from the image build and from Git.
+The host `backend/raw/` directory is mounted read-only except for the nested
+`backend/raw/manager-actions/` directory used by approved knowledge additions
+and updates. `backend/wiki/` and `backend/feedback/` are mounted read/write.
+These private directories are excluded from the image build and from Git.
 
 Stop the WIKI stack without deleting the Docling model cache:
 
@@ -160,6 +160,38 @@ Successful ingestion records a SHA-256 digest in the application-owned wiki
 manifest. Editing a raw file therefore makes it pending again. Knowledge-page,
 index, and manifest changes roll back together if a commit fails.
 
+## Trusted-manager actions (POC)
+
+The Streamlit chat keeps a random `session_id`. A manager message is classified
+as exactly one of `fix_answer`, `update_knowledge`, or `add_knowledge`. The API
+always returns a structured preview showing the action type, whether source
+knowledge changes, and whether derived Wiki maintenance will occur. Nothing is
+applied until the manager replies `Confirm`/`Confermo`; `Cancel`/`Annulla`
+discards the draft. Ambiguous messages receive a clarification question instead
+of being silently routed.
+
+- `update_knowledge` creates an immutable manager-action Markdown source,
+  records the superseded value, and runs normal Wiki ingestion.
+- `add_knowledge` creates an immutable manager-action Markdown source without
+  inventing a superseded value, then runs normal Wiki ingestion.
+- `fix_answer` creates no raw source. After confirmation, an isolated review
+  must prove the manager correction from existing complete Wiki pages and pass
+  the normal evidence guardrail. The application then adds verified guidance to
+  one existing evidence page, preserves provenance, adds graph links to every
+  supporting page, refreshes search, and stores a private regression/audit JSON
+  under `backend/feedback/answer-fixes/` that is never indexed as knowledge.
+
+Conversation drafts are process-memory state and disappear when the API
+restarts. Applied manager actions persist.
+
+This is intentionally a trusted-manager POC, not a production authorization
+model. There is no login, role check, approval queue, rollback UI, or named
+approver identity yet. Do not expose the correction-capable endpoint to
+untrusted users. A production version must add authenticated RBAC, durable
+audit identity, review/rollback, conflict policy, and abuse controls. For a fair
+RAG-versus-WIKI comparison, approved corrections must also be added to the
+shared source corpus and reindexed by RAG.
+
 ## API checks
 
 - `GET /documents` lists pending/ingested sources.
@@ -172,7 +204,10 @@ index, and manifest changes roll back together if a commit fails.
   prose changes. `max_links` defaults to 12 and is capped at 50.
 - `POST /chat` returns a comparison-ready answer with structured citations,
   status, usage, latency, model ID, an optional 0-10 evidence-confidence score,
-  and wiki navigation debug data.
+  and wiki navigation debug data. Supplying a stable `session_id` enables the
+  trusted-manager action preview/confirmation flow and adds an optional
+  structured `manager_action` object. `correction` remains as a compatibility
+  alias during the POC.
 
 ## Answer confidence
 

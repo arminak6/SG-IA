@@ -269,7 +269,7 @@ def update_wiki(
 @app.post("/chat", response_model=ChatResponse, tags=["chat"])
 def chat(request: ChatRequest, service: Any = Depends(get_service)) -> ChatResponse:
     try:
-        result = service.ask(request.question)
+        result = service.ask(request.question, session_id=request.session_id)
         if isinstance(result, str):
             return ChatResponse(
                 approach="wiki",
@@ -289,6 +289,8 @@ def chat(request: ChatRequest, service: Any = Depends(get_service)) -> ChatRespo
             model_id=payload.get("model_id"),
             confidence_score=payload.get("confidence_score"),
             debug=payload.get("debug", {}),
+            manager_action=payload.get("manager_action"),
+            correction=payload.get("correction"),
         )
     except Exception as exc:
         raise _service_error("answer the question", exc) from exc

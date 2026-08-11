@@ -12,6 +12,7 @@ class FakeService:
     def __init__(self) -> None:
         self.updated_paths: object = "not-called"
         self.questions: list[str] = []
+        self.session_ids: list[str | None] = []
         self.repair_max_links: int | None = None
 
     def health(self):
@@ -51,8 +52,9 @@ class FakeService:
             "failed": [],
         }
 
-    def ask(self, question):
+    def ask(self, question, *, session_id=None):
         self.questions.append(question)
+        self.session_ids.append(session_id)
         return {
             "approach": "wiki",
             "status": "answered",
@@ -178,8 +180,12 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(self.service.updated_paths, "not-called")
 
     def test_chat_trims_question_and_returns_wiki_and_raw_citations(self) -> None:
-        response = self.client.post("/chat", json={"question": "  What is this?  "})
+        response = self.client.post(
+            "/chat",
+            json={"question": "  What is this?  ", "session_id": "session-123"},
+        )
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.service.session_ids, ["session-123"])
         self.assertEqual(response.json()["confidence_score"], 8.7)
         self.assertFalse(response.json()["debug"]["guardrail"]["applied"])
         self.assertEqual(self.service.questions, ["What is this?"])
@@ -197,6 +203,58 @@ class ApiTests(unittest.TestCase):
     def test_chat_rejects_blank_question(self) -> None:
         response = self.client.post("/chat", json={"question": "   "})
         self.assertEqual(response.status_code, 422)
+
+    def test_chat_rejects_unsafe_session_identifier(self) -> None:
+        response = self.client.post(
+            "/chat",
+            json={"question": "Hello", "session_id": "../../unsafe"},
+        )
+        self.assertEqual(response.status_code, 422)
+
+    def test_chat_returns_structured_correction_state(self) -> None:
+        class CorrectionService(FakeService):
+            def ask(self, question, *, session_id=None):
+                return {
+                    "approach": "wiki",
+                    "status": "manager_action_proposed",
+                    "answer": "Reply Confirm.",
+                    "citations": [],
+                    "usage": {},
+                    "latency_ms": 3.0,
+                    "model_id": "test-model",
+                    "confidence_score": None,
+                    "debug": {},
+                    "manager_action": {
+                        "state": "proposed",
+                        "action_id": "correction123",
+                        "correction_id": "correction123",
+                        "action_type": "fix_answer",
+                        "changes_knowledge": False,
+                        "wiki_maintenance": True,
+                        "subject": "Holiday start",
+                        "previous_value": "28 December",
+                        "corrected_value": "27 December",
+                        "scope": "Company holiday",
+                        "effective_period": "2026",
+                        "source_path": None,
+                        "feedback_path": None,
+                        "pages_updated": [],
+                    },
+                }
+
+        app.dependency_overrides[get_service] = CorrectionService
+        response = self.client.post(
+            "/chat",
+            json={"question": "No, it is 27 December", "session_id": "manager-1"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "manager_action_proposed")
+        self.assertEqual(
+            response.json()["manager_action"]["corrected_value"],
+            "27 December",
+        )
+        self.assertFalse(response.json()["manager_action"]["changes_knowledge"])
         self.assertEqual(self.service.questions, [])
 
     def test_list_wiki_pages_returns_metadata(self) -> None:
@@ -251,7 +309,7 @@ class ApiTests(unittest.TestCase):
 
     def test_unexpected_service_error_is_sanitized(self) -> None:
         class BrokenService(FakeService):
-            def ask(self, question):
+            def ask(self, question, *, session_id=None):
                 raise RuntimeError("secret-key-value")
 
         app.dependency_overrides[get_service] = BrokenService

@@ -75,6 +75,12 @@ class UpdateWikiResponse(ApiModel):
 
 class ChatRequest(ApiModel):
     question: str = Field(min_length=1, max_length=10_000)
+    session_id: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9_.-]+$",
+    )
 
     @field_validator("question")
     @classmethod
@@ -105,6 +111,23 @@ class ChatDebugResponse(ApiModel):
     guardrail: ChatGuardrailResponse = Field(default_factory=ChatGuardrailResponse)
 
 
+class ChatCorrectionResponse(ApiModel):
+    state: str
+    action_id: Optional[str] = None
+    correction_id: str
+    action_type: str = "update_knowledge"
+    changes_knowledge: bool = True
+    wiki_maintenance: bool = False
+    subject: str
+    previous_value: str
+    corrected_value: str
+    scope: str
+    effective_period: str
+    source_path: Optional[str] = None
+    feedback_path: Optional[str] = None
+    pages_updated: List[str] = Field(default_factory=list)
+
+
 class ChatResponse(ApiModel):
     approach: str = "wiki"
     status: str
@@ -115,6 +138,8 @@ class ChatResponse(ApiModel):
     model_id: Optional[str] = None
     confidence_score: Optional[float] = Field(default=None, ge=0, le=10)
     debug: ChatDebugResponse = Field(default_factory=ChatDebugResponse)
+    manager_action: Optional[ChatCorrectionResponse] = None
+    correction: Optional[ChatCorrectionResponse] = None
 
 
 class WikiPageResponse(ApiModel):

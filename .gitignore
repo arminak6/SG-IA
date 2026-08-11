@@ -23,9 +23,15 @@
 
 /WIKI/backend/raw/**
 !/WIKI/backend/raw/.gitkeep
+!/WIKI/backend/raw/manager-actions/
+/WIKI/backend/raw/manager-actions/**
+!/WIKI/backend/raw/manager-actions/.gitkeep
 
 /WIKI/backend/wiki/**
 !/WIKI/backend/wiki/.gitkeep
+
+/WIKI/backend/feedback/**
+!/WIKI/backend/feedback/.gitkeep
 
 # RAG uploads, extraction artifacts, job state, and document manifests.
 /RAG/data/**

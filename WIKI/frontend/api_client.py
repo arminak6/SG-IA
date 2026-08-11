@@ -192,12 +192,15 @@ class WikiApiClient:
             failed=tuple(failed),
         )
 
-    def chat(self, question: str) -> ChatResponse:
+    def chat(self, question: str, *, session_id: str | None = None) -> ChatResponse:
+        body: dict[str, str] = {"question": question}
+        if session_id:
+            body["session_id"] = session_id
         payload = self._request(
             "POST",
             "/chat",
-            json={"question": question},
-            timeout=(3.05, 180.0),
+            json=body,
+            timeout=(3.05, 600.0),
         )
         if not isinstance(payload, Mapping) or not isinstance(payload.get("answer"), str):
             raise WikiApiError("The backend returned an invalid chat response.")

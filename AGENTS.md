@@ -85,7 +85,7 @@ normalize. At minimum, plan for these conceptual fields:
 Exact endpoint paths and schemas are not yet frozen. Record the decision here
 when they are agreed.
 
-## Current state (2026-08-10)
+## Current state (2026-08-11)
 
 - The project root is initialized as a `main`-branch Git monorepo containing
   the sibling `RAG/` and `WIKI/` implementations. The root README presents the
@@ -161,6 +161,15 @@ when they are agreed.
   producing a 503. Consulted pages and stable guardrail reasons remain in API
   debug metadata, while the WIKI Streamlit UI displays only the final score
   below the answer.
+- WIKI now routes trusted-manager chat actions into `fix_answer`,
+  `update_knowledge`, or `add_knowledge`, always showing a preview and requiring
+  explicit `Confirm`/`Confermo`. Additions and updates become immutable sources
+  under `raw/manager-actions/` and use normal ingestion. Answer fixes create no
+  raw knowledge: they must be verified from existing complete Wiki pages, then
+  maintain one connected evidence page and create a non-indexed regression/audit
+  record under `backend/feedback/answer-fixes/`. Drafts are in memory and all
+  persistent paths remain manager-only POC behavior without authentication.
+  Approved source knowledge changes must also enter RAG before comparison.
 - `test_QA/mateial/ground_truth_qa.json` is the initial shared evaluation fixture: 25
   Italian questions grounded in the WIKI raw corpus, with required answer
   points, source locators, evidence, and two insufficient-knowledge controls.

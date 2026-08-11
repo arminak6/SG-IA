@@ -6,6 +6,7 @@ from datetime import datetime
 from html import escape
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import streamlit as st
 
@@ -388,6 +389,9 @@ if "messages" not in st.session_state:
         }
     ]
 
+if "chat_session_id" not in st.session_state:
+    st.session_state.chat_session_id = uuid4().hex
+
 for message in st.session_state.messages:
     render_chat_message(message)
 
@@ -416,8 +420,11 @@ if question := st.chat_input("Ask a question about your documents..."):
         }
     else:
         try:
-            with st.spinner("Searching the wiki…"):
-                response = api.chat(question)
+            with st.spinner("Working with the wiki…"):
+                response = api.chat(
+                    question,
+                    session_id=st.session_state.chat_session_id,
+                )
             assistant_message = {
                 "role": "assistant",
                 "content": response.answer,

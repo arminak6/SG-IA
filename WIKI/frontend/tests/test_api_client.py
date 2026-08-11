@@ -70,7 +70,7 @@ class WikiApiClientTests(unittest.TestCase):
             }
         )
 
-        result = self.client.chat("What is it?")
+        result = self.client.chat("What is it?", session_id="session-123")
 
         self.assertEqual(result.answer, "The answer.")
         self.assertEqual(
@@ -78,6 +78,12 @@ class WikiApiClientTests(unittest.TestCase):
             ("wiki/topic.md (sources: raw/a.txt)",),
         )
         self.assertEqual(result.confidence_score, 8.7)
+        _, _, kwargs = self.session.request.mock_calls[0]
+        self.assertEqual(
+            kwargs["json"],
+            {"question": "What is it?", "session_id": "session-123"},
+        )
+        self.assertEqual(kwargs["timeout"], (3.05, 600.0))
 
     def test_chat_rejects_out_of_range_confidence(self) -> None:
         self.session.request.return_value = response(

@@ -21,6 +21,8 @@ services:
       - "${WIKI_API_PORT:-8002}:8000"
     volumes:
       - ./backend/raw:/app/WIKI/backend/raw:ro
+      - ./backend/raw/manager-actions:/app/WIKI/backend/raw/manager-actions
+      - ./backend/feedback:/app/WIKI/backend/feedback
       - ./backend/wiki:/app/WIKI/backend/wiki
       - ${WIKI_AWS_CREDENTIALS_FILE:-./aws_credentials.example.json}:/app/WIKI/aws_credentials.json:ro
       - docling_model_cache:/root/.cache
@@ -42,4 +44,3 @@ services:
 volumes:
   docling_model_cache:
     name: sgia_wiki_docling_model_cache
-

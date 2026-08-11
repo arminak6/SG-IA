@@ -5,5 +5,5 @@ aws_credentials.json
 **/.venv
 backend/raw/**
 backend/wiki/**
+backend/feedback/**
 *.pyc
-
