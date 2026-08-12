@@ -92,8 +92,9 @@ class WikiSearchResult:
 class WikiRepository:
     """Restrict all filesystem access to ``backend/raw`` and ``backend/wiki``.
 
-    The only raw write operation creates a new immutable Markdown file in the
-    dedicated manager-actions directory after application confirmation.
+    The only raw write operation creates or updates one stable Markdown source
+    per manager-maintained subject in the dedicated manager-knowledge directory
+    after application confirmation.
     Wiki writes accept Markdown only, validate containment after symlink
     resolution, and use ``os.replace`` so readers see either the old complete
     file or the new complete file.
@@ -115,8 +116,7 @@ class WikiRepository:
     TEXT_SOURCE_SUFFIXES = frozenset({".md", ".markdown", ".txt", ".json", ".csv"})
     BINARY_SOURCE_SUFFIXES = DoclingDocumentExtractor.SUPPORTED_SUFFIXES
     SOURCE_SUFFIXES = TEXT_SOURCE_SUFFIXES | BINARY_SOURCE_SUFFIXES
-    MANAGER_ACTIONS_DIR = "manager-actions"
-    MANAGER_CORRECTIONS_DIR = MANAGER_ACTIONS_DIR
+    MANAGER_KNOWLEDGE_DIR = "manager-knowledge"
 
     def __init__(
         self,
@@ -263,38 +263,77 @@ class WikiRepository:
             return False
         return True
 
-    def create_manager_action_source(self, filename: str, content: str) -> str:
-        """Create one immutable, application-authored manager knowledge source."""
+    def write_manager_knowledge_source(
+        self,
+        filename: str,
+        content: str,
+        *,
+        create_only: bool = False,
+    ) -> tuple[str, str | None]:
+        """Create or atomically replace one stable manager-maintained source.
+
+        Returns the normalized source path and the previous complete content so
+        the caller can restore it if downstream Wiki integration fails.
+        """
 
         relative_name = self._normalize_relative(filename)
         if len(PurePosixPath(relative_name).parts) != 1:
-            raise UnsafePathError("Manager action filename cannot contain directories.")
+            raise UnsafePathError("Manager knowledge filename cannot contain directories.")
         if PurePosixPath(relative_name).suffix.casefold() != ".md":
-            raise UnsafePathError("Manager action sources must be Markdown files.")
+            raise UnsafePathError("Manager knowledge sources must be Markdown files.")
         if not isinstance(content, str) or not content.strip():
-            raise RepositoryError("Manager action source content cannot be empty.")
+            raise RepositoryError("Manager knowledge source content cannot be empty.")
         if len(content) > self.max_extracted_characters:
-            raise RepositoryError("Manager action source exceeds the text safety limit.")
+            raise RepositoryError("Manager knowledge source exceeds the text safety limit.")
 
-        action_root = self._contained_path(self.raw_root, self.MANAGER_ACTIONS_DIR)
-        target = self._contained_path(action_root, relative_name)
-        try:
-            action_root.mkdir(parents=True, exist_ok=True)
-            with target.open("x", encoding="utf-8", newline="\n") as handle:
-                handle.write(content.rstrip() + "\n")
-        except FileExistsError as exc:
-            raise RepositoryError("Manager action source already exists.") from exc
-        except OSError as exc:
-            raise RepositoryError(
-                "Could not create the manager action source. Check the writable "
-                "manager-actions mount."
-            ) from exc
-        return f"raw/{self.MANAGER_ACTIONS_DIR}/{relative_name}"
+        knowledge_root = self._contained_path(self.raw_root, self.MANAGER_KNOWLEDGE_DIR)
+        target = self._contained_path(knowledge_root, relative_name)
+        normalized_content = content.rstrip() + "\n"
+        with self._write_lock:
+            try:
+                previous = target.read_text(encoding="utf-8-sig")
+            except FileNotFoundError:
+                previous = None
+            except OSError as exc:
+                raise RepositoryError("Could not read the manager knowledge source.") from exc
+            if create_only and previous is not None:
+                raise RepositoryError(
+                    "Manager knowledge already exists for this subject; use update_knowledge."
+                )
+            try:
+                knowledge_root.mkdir(parents=True, exist_ok=True)
+                self._atomic_write(target, normalized_content)
+            except OSError as exc:
+                raise RepositoryError(
+                    "Could not write the manager knowledge source. Check the writable "
+                    "manager-knowledge mount."
+                ) from exc
+        return f"raw/{self.MANAGER_KNOWLEDGE_DIR}/{relative_name}", previous
 
-    def create_manager_correction_source(self, filename: str, content: str) -> str:
-        """Backward-compatible alias for the manager-action source writer."""
+    def restore_manager_knowledge_source(
+        self,
+        source_path: str,
+        previous_content: str | None,
+    ) -> None:
+        """Restore an exact manager source snapshot after failed integration."""
 
-        return self.create_manager_action_source(filename, content)
+        normalized = self.normalize_source_path(source_path)
+        prefix = f"raw/{self.MANAGER_KNOWLEDGE_DIR}/"
+        if not normalized.casefold().startswith(prefix.casefold()):
+            raise UnsafePathError("Only manager-knowledge sources can be restored.")
+        relative_name = normalized[len(prefix) :]
+        if len(PurePosixPath(relative_name).parts) != 1:
+            raise UnsafePathError("Manager knowledge filename cannot contain directories.")
+        knowledge_root = self._contained_path(self.raw_root, self.MANAGER_KNOWLEDGE_DIR)
+        target = self._contained_path(knowledge_root, relative_name)
+        with self._write_lock:
+            try:
+                if previous_content is None:
+                    target.unlink(missing_ok=True)
+                else:
+                    self._atomic_write(target, previous_content.rstrip() + "\n")
+            except OSError as exc:
+                raise RepositoryError("Could not restore the manager knowledge source.") from exc
 
     def source_digest(self, source_path: str) -> str:
         """Return a content hash so an edited source becomes pending again."""

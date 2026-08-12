@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 import uuid
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+from pathlib import PurePosixPath
 from typing import Any, Mapping
 
 from .bedrock import BedrockConverseClient, ConverseTurn
-from .repository import WikiRepository
+from .repository import RepositoryError, WikiRepository
 
 
 ACTION_TYPES = frozenset({"fix_answer", "update_knowledge", "add_knowledge"})
@@ -95,6 +97,14 @@ class ManagerActionProposal:
 class ManagerActionSession:
     context: ManagerActionContext
     pending: ManagerActionProposal | None = None
+
+
+@dataclass(frozen=True)
+class ManagerKnowledgeWrite:
+    """One reversible write to a stable manager-maintained source."""
+
+    source_path: str
+    previous_content: str | None
 
 
 MANAGER_ACTION_TOOL = {
@@ -345,7 +355,12 @@ class ManagerActionInterpreter:
 
 
 class ManagerActionStore:
-    """Persist approved knowledge actions and answer-fix audit records."""
+    """Persist stable manager knowledge and answer-fix audit records."""
+
+    WIKI_PATH_PATTERN = re.compile(
+        r"(?:sources|concepts|entities|syntheses)/[^\s`'\"<>]+?\.md",
+        flags=re.IGNORECASE,
+    )
 
     def __init__(self, repository: WikiRepository) -> None:
         self.repository = repository
@@ -356,15 +371,106 @@ class ManagerActionStore:
         context: ManagerActionContext,
         *,
         approved_by: str = "POC manager",
-    ) -> str:
+    ) -> ManagerKnowledgeWrite:
         if not proposal.changes_knowledge:
             raise ManagerActionError("Answer fixes are not raw knowledge sources.")
-        if proposal.source_path:
-            return proposal.source_path
         approved_at = datetime.now(timezone.utc)
-        filename = f"{approved_at.strftime('%Y%m%dT%H%M%SZ')}-{proposal.action_id}.md"
+        existing_sources = self._existing_manager_sources(proposal, context)
+        if proposal.source_path:
+            normalized = self.repository.normalize_source_path(proposal.source_path)
+            if normalized.casefold().startswith(
+                f"raw/{self.repository.MANAGER_KNOWLEDGE_DIR}/".casefold()
+            ):
+                existing_sources.add(normalized)
+        if len(existing_sources) > 1:
+            raise ManagerActionError(
+                "The update refers to multiple manager knowledge sources; narrow its scope."
+            )
+
+        if existing_sources:
+            source_path = next(iter(existing_sources))
+            filename = PurePosixPath(source_path).name
+        else:
+            filename = f"{self._stable_key(proposal)}.md"
         content = self._knowledge_markdown(proposal, approved_by, approved_at)
-        return self.repository.create_manager_action_source(filename, content)
+        try:
+            source_path, previous_content = self.repository.write_manager_knowledge_source(
+                filename,
+                content,
+                create_only=proposal.action_type == "add_knowledge",
+            )
+        except RepositoryError as exc:
+            raise ManagerActionError(str(exc)) from exc
+        return ManagerKnowledgeWrite(source_path, previous_content)
+
+    def rollback_knowledge(self, write: ManagerKnowledgeWrite) -> None:
+        """Restore the previous stable source after failed Wiki integration."""
+
+        self.repository.restore_manager_knowledge_source(
+            write.source_path,
+            write.previous_content,
+        )
+
+    def _existing_manager_sources(
+        self,
+        proposal: ManagerActionProposal,
+        context: ManagerActionContext,
+    ) -> set[str]:
+        prefix = f"raw/{self.repository.MANAGER_KNOWLEDGE_DIR}/".casefold()
+        sources: set[str] = set()
+        page_paths: list[str] = []
+
+        for match in self.WIKI_PATH_PATTERN.findall(proposal.scope):
+            try:
+                normalized = self.repository.normalize_wiki_path(match, allow_system=False)
+            except RepositoryError:
+                continue
+            if normalized not in page_paths:
+                page_paths.append(normalized)
+
+        for citation in context.citations:
+            if not isinstance(citation, Mapping):
+                continue
+            raw_sources = citation.get("source_paths", [])
+            if isinstance(raw_sources, list):
+                for value in raw_sources:
+                    try:
+                        source = self.repository.normalize_source_path(str(value))
+                    except RepositoryError:
+                        continue
+                    if source.casefold().startswith(prefix) and self.repository.raw_exists(source):
+                        sources.add(source)
+            wiki_path = citation.get("wiki_path")
+            if isinstance(wiki_path, str):
+                try:
+                    normalized = self.repository.normalize_wiki_path(
+                        wiki_path, allow_system=False
+                    )
+                except RepositoryError:
+                    continue
+                if normalized not in page_paths:
+                    page_paths.append(normalized)
+
+        for page_path in page_paths:
+            try:
+                page_sources = self.repository.page_source_paths(page_path)
+            except RepositoryError:
+                continue
+            sources.update(
+                source
+                for source in page_sources
+                if source.casefold().startswith(prefix)
+            )
+        return sources
+
+    def _stable_key(self, proposal: ManagerActionProposal) -> str:
+        scope_paths = self.WIKI_PATH_PATTERN.findall(proposal.scope)
+        seed = PurePosixPath(scope_paths[0]).stem if scope_paths else proposal.subject
+        normalized = unicodedata.normalize("NFKD", seed).encode("ascii", "ignore").decode()
+        slug = re.sub(r"[^a-z0-9]+", "-", normalized.casefold()).strip("-")
+        if not slug:
+            slug = f"manager-knowledge-{proposal.action_id}"
+        return slug[:120].rstrip("-")
 
     def persist_answer_fix(
         self,
@@ -409,27 +515,17 @@ class ManagerActionStore:
         approved_by: str,
         approved_at: datetime,
     ) -> str:
-        history = ""
-        if proposal.action_type == "update_knowledge":
-            history = f"""## Superseded value
+        return f"""# Manager Knowledge: {proposal.subject}
 
-{proposal.previous_value}
-
-For the stated scope and effective period, the approved value below supersedes conflicting older
-statements. Preserve older provenance and label the conflict as superseded.
-
-"""
-        return f"""# Approved Manager Action: {proposal.subject}
-
-- Action ID: `{proposal.action_id}`
-- Action type: `{proposal.action_type}`
-- Approved by: {approved_by}
-- Approved at: {approved_at.isoformat(timespec="seconds").replace("+00:00", "Z")}
+- Last action ID: `{proposal.action_id}`
+- Last action type: `{proposal.action_type}`
+- Updated by: {approved_by}
+- Updated at: {approved_at.isoformat(timespec="seconds").replace("+00:00", "Z")}
 - Scope: {proposal.scope}
 - Effective period: {proposal.effective_period or "Not specified"}
 - Reason: {proposal.reason or "Manager-approved POC action"}
 
-{history}## Approved knowledge
+## Current approved knowledge
 
 {proposal.new_value}
 """

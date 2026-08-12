@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -13,6 +14,7 @@ from backend.app.manager_actions import (
     ManagerActionContext,
     ManagerActionProposal,
     ManagerActionStore,
+    ManagerKnowledgeWrite,
 )
 from backend.app.repository import WikiRepository
 from backend.app.service import WikiService
@@ -119,6 +121,22 @@ class FakeKnowledgeStore:
     def persist_knowledge(self, proposal, context):
         self.calls.append((proposal, context))
         return f"raw/manager-actions/{proposal.action_id}.md"
+
+
+class ReversibleKnowledgeStore(FakeKnowledgeStore):
+    def __init__(self):
+        super().__init__()
+        self.rollbacks = []
+
+    def persist_knowledge(self, proposal, context):
+        self.calls.append((proposal, context))
+        return ManagerKnowledgeWrite(
+            "raw/manager-knowledge/procedure.md",
+            "Previous stable source\n",
+        )
+
+    def rollback_knowledge(self, write):
+        self.rollbacks.append(write)
 
 
 class RecordingKnowledgeAgent:
@@ -268,22 +286,128 @@ The source contains the approved procedure.
 
         self.assertEqual(applied["status"], "manager_action_applied")
         self.assertEqual(len(store.calls), 1)
-        update.assert_called_once_with(["raw/manager-actions/add_knowledge-123.md"])
+        update.assert_called_once_with(
+            ["raw/manager-actions/add_knowledge-123.md"],
+            allow_manager_knowledge=True,
+        )
 
-    def test_add_and_update_sources_have_distinct_history_semantics(self):
+    def test_add_then_update_reuses_one_stable_manager_source(self):
         with tempfile.TemporaryDirectory() as root:
             repository = self._repository(root)
             store = ManagerActionStore(repository)
             context = ManagerActionContext(question="", answer="", citations=())
 
-            add_path = store.persist_knowledge(action("add_knowledge"), context)
-            update_path = store.persist_knowledge(action("update_knowledge"), context)
-            add_content = repository.read_raw(add_path)
-            update_content = repository.read_raw(update_path)
+            add_write = store.persist_knowledge(action("add_knowledge"), context)
+            repository.write_wiki_pages(
+                {
+                    "concepts/procedure.md": f"""---
+title: Procedure
+page_type: concept
+updated: 2026-08-11
+sources:
+- raw/procedure.md
+- {add_write.source_path}
+---
 
-            self.assertNotIn("## Superseded value", add_content)
-            self.assertIn("## Superseded value", update_content)
-            self.assertIn("Old procedure", update_content)
+# Procedure
+
+The source contains the approved procedure.
+
+## Sources
+
+- raw/procedure.md
+- {add_write.source_path}
+"""
+                }
+            )
+            linked_context = ManagerActionContext(
+                question="What is the procedure?",
+                answer="Use the documented approved procedure.",
+                citations=(
+                    {
+                        "wiki_path": "concepts/procedure.md",
+                        "source_paths": ["raw/procedure.md", add_write.source_path],
+                    },
+                ),
+            )
+            update_write = store.persist_knowledge(
+                replace(
+                    action("update_knowledge"),
+                    subject="Approved procedure instruction",
+                    new_value="Use the revised approved procedure.",
+                ),
+                linked_context,
+            )
+            update_content = repository.read_raw(update_write.source_path)
+
+            self.assertEqual(add_write.source_path, update_write.source_path)
+            self.assertEqual(
+                update_write.source_path,
+                "raw/manager-knowledge/generic-operating-procedure.md",
+            )
+            self.assertIn("Use the revised approved procedure.", update_content)
+            self.assertNotIn("Old procedure", update_content)
+            self.assertNotIn("Superseded value", update_content)
+            self.assertEqual(len(repository.list_raw_documents()), 2)
+
+    def test_store_rollback_restores_previous_stable_value(self):
+        with tempfile.TemporaryDirectory() as root:
+            repository = self._repository(root)
+            store = ManagerActionStore(repository)
+            context = ManagerActionContext(question="", answer="", citations=())
+            first = store.persist_knowledge(action("add_knowledge"), context)
+            first_content = repository.read_raw(first.source_path)
+            second = store.persist_knowledge(
+                replace(
+                    action("update_knowledge"),
+                    new_value="Use the replacement procedure.",
+                ),
+                context,
+            )
+
+            store.rollback_knowledge(second)
+
+            self.assertEqual(repository.read_raw(first.source_path), first_content)
+            self.assertEqual(len(repository.list_raw_documents()), 2)
+
+    def test_failed_integration_rolls_back_the_stable_source(self):
+        with tempfile.TemporaryDirectory() as root:
+            repository = self._repository(root)
+            store = ReversibleKnowledgeStore()
+            service = self._service(
+                root,
+                repository,
+                action("update_knowledge"),
+                store=store,
+            )
+            service.ask("What is the procedure?", session_id="manager-rollback")
+            service.ask(
+                "Update knowledge: use the replacement procedure.",
+                session_id="manager-rollback",
+            )
+            failed_update = {
+                "processed": [],
+                "skipped": [],
+                "failed": [
+                    {
+                        "source_path": "raw/manager-knowledge/procedure.md",
+                        "error": "integration failed",
+                    }
+                ],
+            }
+            with patch.object(
+                service,
+                "_update_existing_knowledge",
+                return_value=failed_update,
+            ):
+                result = service.ask("Confirm", session_id="manager-rollback")
+
+            pending = service._session("manager-rollback").pending
+
+        self.assertEqual(result["status"], "manager_action_failed")
+        self.assertEqual(len(store.rollbacks), 1)
+        self.assertIsNotNone(pending)
+        self.assertIsNone(pending.source_path)
 
     def test_update_routes_to_existing_canonical_page_without_normal_ingestion(self):
         with tempfile.TemporaryDirectory() as root:

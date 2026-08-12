@@ -1,8 +1,9 @@
 # SG-IA-WIKI
 
 An AWS Bedrock-powered Q&A application built around the persistent LLM Wiki
-pattern: immutable raw sources, an LLM-maintained Markdown wiki, and an explicit
-schema that governs ingestion and querying.
+pattern: immutable uploaded sources, stable manager-maintained sources, an
+LLM-maintained Markdown wiki, and an explicit schema that governs ingestion and
+querying.
 
 ## Layout
 
@@ -74,8 +75,10 @@ docker-compose logs --tail 100 wiki-api
 ```
 
 The host `backend/raw/` directory is mounted read-only except for the nested
-`backend/raw/manager-actions/` directory used by approved knowledge additions
-and updates. `backend/wiki/` and `backend/feedback/` are mounted read/write.
+`backend/raw/manager-knowledge/` directory. A confirmed addition creates one
+stable subject file there; later updates replace that file instead of adding
+documents. Any legacy `manager-actions/` files are read-only under the parent
+mount. `backend/wiki/` and `backend/feedback/` are mounted read/write.
 These private directories are excluded from the image build and from Git.
 
 Stop the WIKI stack without deleting the Docling model cache:
@@ -170,14 +173,14 @@ applied until the manager replies `Confirm`/`Confermo`; `Cancel`/`Annulla`
 discards the draft. Ambiguous messages receive a clarification question instead
 of being silently routed.
 
-- `update_knowledge` creates an immutable, non-indexed manager-action Markdown
-  audit/provenance source, records the superseded value, and rewrites only an
-  existing canonical Wiki page. The application rejects attempts to create a
-  new Wiki or source-summary page, then replaces the changed page's semantic
-  sections during index refresh.
-- `add_knowledge` creates an immutable manager-action Markdown source without
-  inventing a superseded value, then runs normal Wiki ingestion, which creates
-  a source-summary page and may add other useful knowledge pages.
+- `add_knowledge` creates one stable
+  `raw/manager-knowledge/<subject>.md` source, then normal ingestion creates its
+  source summary and any useful canonical pages.
+- `update_knowledge` atomically replaces that same stable source and rewrites
+  its existing source summary and canonical pages. It cannot create another
+  Wiki page, the obsolete value is removed from active knowledge, and the
+  semantic index replaces the changed sections. If integration fails, the raw
+  source is rolled back to its previous complete value.
 - `fix_answer` creates no raw source. After confirmation, an isolated review
   must prove the manager correction from existing complete Wiki pages and pass
   the normal evidence guardrail. The application then adds verified guidance to
@@ -200,8 +203,8 @@ shared source corpus and reindexed by RAG.
 
 - `GET /documents` lists pending/ingested sources.
 - `POST /wiki/update` ingests selected pending sources sequentially.
-  Manager `update_knowledge` audit sources are deliberately skipped here so
-  bulk ingestion cannot bypass their existing-page-only write restrictions.
+  Manager-knowledge sources are deliberately skipped here so bulk ingestion
+  cannot bypass confirmation and existing-page update restrictions.
 - `GET /wiki/pages` exposes page summaries and raw provenance.
 - `GET /wiki/lint` checks schema, provenance, links, and index coverage.
 - `GET /wiki/lint` also reports incoming/outgoing graph weaknesses as warnings.

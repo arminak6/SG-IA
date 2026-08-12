@@ -22,6 +22,7 @@ from .manager_actions import (
     ManagerActionProposal,
     ManagerActionSession,
     ManagerActionStore,
+    ManagerKnowledgeWrite,
 )
 from .embeddings import TitanEmbeddingClient
 from .repository import RepositoryError, WikiRepository
@@ -163,7 +164,12 @@ class WikiService:
             normalized = f"raw/{normalized}"
         return WikiRepository.normalize_source_path(normalized)
 
-    def update_wiki(self, relative_paths: Sequence[str] | None = None) -> dict[str, object]:
+    def update_wiki(
+        self,
+        relative_paths: Sequence[str] | None = None,
+        *,
+        allow_manager_knowledge: bool = False,
+    ) -> dict[str, object]:
         """Sequentially ingest selected sources, or every currently pending source."""
 
         documents = self.repository.list_raw_documents()
@@ -200,13 +206,16 @@ class WikiService:
                 if document is None:
                     failed.append({"source_path": source_path, "error": "Raw source does not exist."})
                     continue
-                if self._is_manager_update_source(document.source_path):
+                if (
+                    self._is_manager_controlled_source(document.source_path)
+                    and not allow_manager_knowledge
+                ):
                     skipped.append(
                         {
                             "source_path": document.source_path,
                             "reason": (
-                                "Manager update audit sources require the confirmed "
-                                "existing-page update workflow."
+                                "Manager knowledge sources require the confirmed "
+                                "manager-action workflow."
                             ),
                         }
                     )
@@ -261,8 +270,10 @@ class WikiService:
             },
         }
 
-    def _is_manager_update_source(self, source_path: str) -> bool:
+    def _is_manager_controlled_source(self, source_path: str) -> bool:
         normalized = self.repository.normalize_source_path(source_path)
+        if normalized.casefold().startswith("raw/manager-knowledge/"):
+            return True
         if not normalized.casefold().startswith("raw/manager-actions/"):
             return False
         try:
@@ -519,8 +530,15 @@ class WikiService:
         *,
         started_at: float,
     ) -> dict[str, object]:
+        knowledge_write: ManagerKnowledgeWrite | None = None
         try:
-            source_path = self.correction_store.persist_knowledge(proposal, session.context)
+            persisted = self.correction_store.persist_knowledge(proposal, session.context)
+            if isinstance(persisted, ManagerKnowledgeWrite):
+                knowledge_write = persisted
+                source_path = persisted.source_path
+            else:
+                # Preserve compatibility with simple test/demonstration stores.
+                source_path = str(persisted)
             proposal = replace(proposal, source_path=source_path)
             self._set_session(session_id, replace(session, pending=proposal))
         except Exception as exc:
@@ -540,7 +558,9 @@ class WikiService:
                 context=session.context,
             )
         else:
-            update = self.update_wiki([source_path])
+            update = self.update_wiki(
+                [source_path], allow_manager_knowledge=True
+            )
         processed = update.get("processed", [])
         skipped = update.get("skipped", [])
         failed = update.get("failed", [])
@@ -556,6 +576,18 @@ class WikiService:
             else False
         )
         if failed or (not processed and not already_ingested):
+            if knowledge_write is not None:
+                try:
+                    self.correction_store.rollback_knowledge(knowledge_write)
+                    proposal = replace(proposal, source_path=None)
+                    self._set_session(
+                        session_id,
+                        replace(session, pending=proposal),
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Manager knowledge rollback failed (%s)", type(exc).__name__
+                    )
             return self._correction_response(
                 status="manager_action_failed",
                 answer=self._correction_ingestion_failure_message(proposal.language, source_path),
@@ -616,7 +648,11 @@ class WikiService:
     ) -> dict[str, object]:
         """Apply a manager update while making new Wiki paths impossible."""
 
-        writable_pages = self._manager_update_targets(proposal, context)
+        writable_pages = self._manager_update_targets(
+            proposal,
+            context,
+            source_path=source_path,
+        )
         processed: list[dict[str, object]] = []
         skipped: list[dict[str, str]] = []
         failed: list[dict[str, str]] = []
@@ -671,17 +707,17 @@ class WikiService:
         self,
         proposal: ManagerActionProposal,
         context: ManagerActionContext,
+        *,
+        source_path: str,
     ) -> tuple[str, ...]:
-        """Prefer explicit scope paths, then canonical pages cited by the prior answer."""
+        """Select existing canonical and source-summary pages for a stable source."""
 
-        explicit = tuple(
+        explicit = list(
             dict.fromkeys(
                 self.repository.normalize_wiki_path(match, allow_system=False)
                 for match in self.WIKI_SCOPE_PATH_PATTERN.findall(proposal.scope)
             )
         )
-        if explicit:
-            return explicit
 
         cited: list[str] = []
         for citation in context.citations:
@@ -697,7 +733,9 @@ class WikiService:
                 cited.append(path)
 
         canonical = [path for path in cited if not path.casefold().startswith("sources/")]
-        return tuple(canonical or cited)
+        provenance = self.repository.provenance_pages(source_path)
+        selected = explicit + (canonical or cited) + provenance
+        return tuple(dict.fromkeys(selected))
 
     def _apply_answer_fix(
         self,
@@ -993,11 +1031,13 @@ class WikiService:
         )
         if proposal.language == "italian":
             return (
-                "Azione confermata, salvata come fonte immutabile e integrata nella Wiki.\n\n"
+                "Azione confermata: la fonte stabile è stata aggiornata e integrata "
+                "nella Wiki.\n\n"
                 f"**{proposal.subject}: {proposal.new_value}**"
             )
         return (
-            f"Manager action confirmed: {operation}. The immutable source was integrated into the Wiki.\n\n"
+            f"Manager action confirmed: {operation}. The stable source was integrated "
+            "into the Wiki.\n\n"
             f"**{proposal.subject}: {proposal.new_value}**"
         )
 

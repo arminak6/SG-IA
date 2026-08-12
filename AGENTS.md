@@ -167,10 +167,11 @@ when they are agreed.
   below the answer.
 - WIKI now routes trusted-manager chat actions into `fix_answer`,
   `update_knowledge`, or `add_knowledge`, always showing a preview and requiring
-  explicit `Confirm`/`Confermo`. Additions and updates become immutable sources
-  under `raw/manager-actions/`. Additions use normal ingestion and can create
-  Wiki pages; updates can rewrite only existing application-selected pages and
-  cannot create a Wiki or source-summary page. Answer fixes create no
+  explicit `Confirm`/`Confermo`. Additions create one stable subject source
+  under `raw/manager-knowledge/` and can create Wiki pages. Updates atomically
+  replace that same source, rewrite its existing source summary and canonical
+  pages, and cannot increase the document or Wiki-page count; failed integration
+  restores the prior source. Action history stays in `wiki/log.md`. Answer fixes create no
   raw knowledge: they must be verified from existing complete Wiki pages, then
   maintain one connected evidence page and create a non-indexed regression/audit
   record under `backend/feedback/answer-fixes/`. Drafts are in memory and all

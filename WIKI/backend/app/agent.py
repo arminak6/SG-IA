@@ -265,17 +265,17 @@ with a short summary.
 
 UPDATE_EXISTING_PROMPT = """
 For this manager-approved knowledge update, the application has already loaded
-the immutable audit/provenance source into the user message. Integrate the new
+the stable current-knowledge source into the user message. Integrate the new
 current value by rewriting the smallest relevant set of application-approved
 existing Wiki pages. Never create a Wiki page or a source-summary page for this
 update. The write tool rejects every path that did not already exist before the
 operation.
 
 Read the relevant complete existing page before rewriting it. Preserve every
-prior raw source citation, add the exact new manager-action source path to YAML
-frontmatter and the Sources section, make the approved current value
-unambiguous, and clearly label conflicting older values as superseded or
-historical. Do not repeat an obsolete value as if it were still current. Stage
+still-valid raw source citation and retain the exact stable manager-knowledge
+source path in YAML frontmatter and the Sources section. Make the approved
+current value unambiguous and remove the obsolete manager-maintained value;
+history belongs in the operation log, not active knowledge prose. Stage
 complete Markdown pages with level-one headings. Touch only pages needed for
 the stated update. Do not write index.md or log.md; the application maintains
 them deterministically. Once the first page write succeeds, discovery is

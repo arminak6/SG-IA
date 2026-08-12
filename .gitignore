@@ -26,6 +26,12 @@
 !/WIKI/backend/raw/manager-actions/
 /WIKI/backend/raw/manager-actions/**
 !/WIKI/backend/raw/manager-actions/.gitkeep
+!/WIKI/backend/raw/manager-knowledge/
+/WIKI/backend/raw/manager-knowledge/**
+!/WIKI/backend/raw/manager-knowledge/.gitkeep
+!/WIKI/backend/raw/manager-knowledge/
+/WIKI/backend/raw/manager-knowledge/**
+!/WIKI/backend/raw/manager-knowledge/.gitkeep
 
 /WIKI/backend/wiki/**
 !/WIKI/backend/wiki/.gitkeep

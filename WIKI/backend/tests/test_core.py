@@ -863,7 +863,7 @@ Knowledge.
             self.assertIn("warning", result["processed"][0])
             self.assertTrue(repository.is_ingested("raw/article.txt"))
 
-    def test_general_ingestion_cannot_bypass_existing_page_manager_update_flow(self) -> None:
+    def test_general_ingestion_cannot_bypass_manager_knowledge_workflow(self) -> None:
         class UnexpectedIngestionAgent:
             def ingest(self, prompt: str) -> IngestionResult:
                 raise AssertionError("Manager update audit source reached normal ingestion")
@@ -871,16 +871,14 @@ Knowledge.
         with tempfile.TemporaryDirectory() as temp_dir:
             project_root = Path(temp_dir)
             backend_root = project_root / "backend"
-            action_root = backend_root / "raw" / "manager-actions"
-            action_root.mkdir(parents=True)
-            (action_root / "update.md").write_text(
-                """# Approved Manager Action: Meeting date
+            knowledge_root = backend_root / "raw" / "manager-knowledge"
+            knowledge_root.mkdir(parents=True)
+            (knowledge_root / "meeting.md").write_text(
+                """# Manager Knowledge: Meeting date
 
-- Action type: `update_knowledge`
+## Current approved knowledge
 
-## Approved knowledge
-
-22 February 2027
+20 February 2027
 """,
                 encoding="utf-8",
             )
@@ -896,12 +894,12 @@ Knowledge.
                 agent=UnexpectedIngestionAgent(),
             )
 
-            result = service.update_wiki(["manager-actions/update.md"])
+            result = service.update_wiki(["manager-knowledge/meeting.md"])
 
         self.assertEqual(result["processed"], [])
         self.assertEqual(result["failed"], [])
         self.assertEqual(result["summary"]["skipped"], 1)
-        self.assertIn("existing-page", result["skipped"][0]["reason"])
+        self.assertIn("manager-action workflow", result["skipped"][0]["reason"])
 
     def test_answer_requires_research_results_before_submission(self) -> None:
         page = wiki_page(body="The answer is 42.")

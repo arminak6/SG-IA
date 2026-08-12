@@ -21,7 +21,7 @@ services:
       - "${WIKI_API_PORT:-8002}:8000"
     volumes:
       - ./backend/raw:/app/WIKI/backend/raw:ro
-      - ./backend/raw/manager-actions:/app/WIKI/backend/raw/manager-actions
+      - ./backend/raw/manager-knowledge:/app/WIKI/backend/raw/manager-knowledge
       - ./backend/feedback:/app/WIKI/backend/feedback
       - ./backend/wiki:/app/WIKI/backend/wiki
       - ${WIKI_AWS_CREDENTIALS_FILE:-./aws_credentials.example.json}:/app/WIKI/aws_credentials.json:ro

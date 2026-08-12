@@ -177,7 +177,7 @@ class CorrectionWorkflowTests(unittest.TestCase):
         self.assertTrue(ManagerActionInterpreter.is_cancellation("Cancel correction"))
         self.assertFalse(ManagerActionInterpreter.looks_like_action("Tell me more"))
 
-    def test_store_creates_immutable_raw_source_without_llm_generated_context(self) -> None:
+    def test_store_creates_one_stable_source_without_llm_generated_context(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             repository = WikiRepository(Path(temp_dir) / "backend")
             context = ManagerActionContext(
@@ -191,18 +191,25 @@ class CorrectionWorkflowTests(unittest.TestCase):
                 ),
             )
 
-            source_path = ManagerActionStore(repository).persist_knowledge(proposal(), context)
-            content = repository.read_raw(source_path)
+            store = ManagerActionStore(repository)
+            write = store.persist_knowledge(proposal(), context)
+            content = repository.read_raw(write.source_path)
 
-            self.assertTrue(source_path.startswith("raw/manager-actions/"))
+            self.assertEqual(
+                write.source_path,
+                "raw/manager-knowledge/company-holiday-start-date.md",
+            )
             self.assertIn("27 December", content)
             self.assertIn("POC manager", content)
             self.assertNotIn("28 December.", content)
             self.assertNotIn("concepts/holiday.md", content)
             self.assertNotIn("Previous answer", content)
-            filename = source_path.rsplit("/", 1)[-1]
-            with self.assertRaises(RepositoryError):
-                repository.create_manager_correction_source(filename, content)
+            second = store.persist_knowledge(
+                replace(proposal(), new_value="26 December"), context
+            )
+            self.assertEqual(second.source_path, write.source_path)
+            self.assertEqual(len(repository.list_raw_documents()), 1)
+            self.assertIn("26 December", repository.read_raw(second.source_path))
 
     def _service(self, temporary_root: str, interpreter, store) -> WikiService:
         settings = BedrockSettings(
