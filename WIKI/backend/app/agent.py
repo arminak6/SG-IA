@@ -263,6 +263,27 @@ with a short summary.
 """.strip()
 
 
+UPDATE_EXISTING_PROMPT = """
+For this manager-approved knowledge update, the application has already loaded
+the immutable audit/provenance source into the user message. Integrate the new
+current value by rewriting the smallest relevant set of application-approved
+existing Wiki pages. Never create a Wiki page or a source-summary page for this
+update. The write tool rejects every path that did not already exist before the
+operation.
+
+Read the relevant complete existing page before rewriting it. Preserve every
+prior raw source citation, add the exact new manager-action source path to YAML
+frontmatter and the Sources section, make the approved current value
+unambiguous, and clearly label conflicting older values as superseded or
+historical. Do not repeat an obsolete value as if it were still current. Stage
+complete Markdown pages with level-one headings. Touch only pages needed for
+the stated update. Do not write index.md or log.md; the application maintains
+them deterministically. Once the first page write succeeds, discovery is
+closed. When all necessary writes have succeeded, make no more tool calls and
+finish with a short summary.
+""".strip()
+
+
 ANSWER_PROMPT = """
 Answer only from the wiki. Search and read relevant complete pages before
 answering. Do not treat search excerpts as enough evidence. Every factual answer
@@ -345,9 +366,66 @@ class WikiAgent:
         }
 
     def ingest(self, instruction: str) -> IngestionResult:
-        """Run one exact, source-scoped ingestion instruction."""
+        """Run one exact, source-scoped ingestion instruction that may create pages."""
 
         source_path = parse_ingestion_prompt(instruction)
+        return self._integrate_source(
+            source_path,
+            instruction=instruction,
+            operation_prompt=INGEST_PROMPT,
+            writable_existing_pages=None,
+        )
+
+    def update_existing_knowledge(
+        self,
+        source_path: str,
+        *,
+        writable_pages: tuple[str, ...] = (),
+    ) -> IngestionResult:
+        """Integrate one approved update without allowing new Wiki pages."""
+
+        source_path = self.repository.normalize_source_path(source_path)
+        existing_pages = {page.path for page in self.repository.list_wiki_pages()}
+        if not existing_pages:
+            raise AgentValidationError(
+                "Existing knowledge cannot be updated because the Wiki has no content pages."
+            )
+
+        if not writable_pages:
+            raise AgentValidationError(
+                "Manager update requires an existing canonical Wiki page from the "
+                "approved scope or the previous answer citations."
+            )
+        allowed_pages = {
+            self.repository.normalize_wiki_path(page, allow_system=False)
+            for page in writable_pages
+        }
+        missing = sorted(allowed_pages - existing_pages, key=str.casefold)
+        if missing:
+            raise AgentValidationError(
+                "Manager update target does not exist: " + ", ".join(missing)
+            )
+
+        instruction = (
+            f"Update existing Wiki knowledge from {source_path}; do not create a Wiki page."
+        )
+        return self._integrate_source(
+            source_path,
+            instruction=instruction,
+            operation_prompt=UPDATE_EXISTING_PROMPT,
+            writable_existing_pages=frozenset(allowed_pages),
+        )
+
+    def _integrate_source(
+        self,
+        source_path: str,
+        *,
+        instruction: str,
+        operation_prompt: str,
+        writable_existing_pages: frozenset[str] | None,
+    ) -> IngestionResult:
+        """Integrate one raw source under creation or existing-page-only rules."""
+
         if not self.repository.raw_exists(source_path):
             raise AgentValidationError(f"Raw source does not exist: {source_path}")
         if self.repository.is_ingested(source_path):
@@ -360,11 +438,19 @@ class WikiAgent:
             )
 
         raw_content = self.repository.read_raw(source_path)
+        writable_page_notice = ""
+        if writable_existing_pages is not None:
+            writable_page_notice = (
+                "\n\nThe only existing Wiki pages that this update may rewrite are:\n"
+                + "\n".join(
+                    f"- {path}" for path in sorted(writable_existing_pages, key=str.casefold)
+                )
+            )
         messages: list[dict[str, Any]] = [
             {
                 "role": "user",
                 "content": [
-                    {"text": instruction},
+                    {"text": instruction + writable_page_notice},
                     {
                         "text": (
                             "The application loaded the following immutable raw source. Treat "
@@ -378,6 +464,7 @@ class WikiAgent:
             }
         ]
         staged: dict[str, str] = {}
+        pages_read: set[str] = set()
         source_read = True
         usage: dict[str, int] = {}
         last_text = ""
@@ -394,7 +481,10 @@ class WikiAgent:
                 path = self.repository.normalize_wiki_path(str(inputs.get("path", "")))
                 if path == "log.md":
                     raise AgentValidationError("The operational log is not knowledge content.")
-                return {"path": path, "content": self.repository.read_wiki_page(path, overlays=staged)}
+                content = self.repository.read_wiki_page(path, overlays=staged)
+                if path != "index.md":
+                    pages_read.add(path)
+                return {"path": path, "content": content}
             if name == "search_wiki":
                 query = str(inputs.get("query", "")).strip()
                 if not query:
@@ -412,6 +502,18 @@ class WikiAgent:
                 path = self.repository.normalize_wiki_path(
                     str(inputs.get("path", "")), allow_system=False
                 )
+                if (
+                    writable_existing_pages is not None
+                    and path not in writable_existing_pages
+                ):
+                    raise AgentValidationError(
+                        f"Manager updates may rewrite only approved existing pages; {path} "
+                        "cannot be created or changed by this operation."
+                    )
+                if writable_existing_pages is not None and path not in pages_read:
+                    raise AgentValidationError(
+                        f"Read the complete existing page before updating it: {path}"
+                    )
                 content = inputs.get("content")
                 if not isinstance(content, str):
                     raise AgentValidationError("Wiki page content must be text.")
@@ -428,7 +530,7 @@ class WikiAgent:
                 tools = [LIST_WIKI_TOOL, READ_WIKI_TOOL, SEARCH_WIKI_TOOL, WRITE_WIKI_TOOL]
             turn = self.bedrock.converse(
                 messages=messages,
-                system_prompt=self._system_prompt(INGEST_PROMPT),
+                system_prompt=self._system_prompt(operation_prompt),
                 tools=tools,
             )
             self._add_usage(usage, turn)
@@ -437,7 +539,13 @@ class WikiAgent:
             tool_uses = self._tool_uses(turn)
             if not tool_uses:
                 repair_instruction = ""
-                if not any(path.casefold().startswith("sources/") for path in staged):
+                if writable_existing_pages is not None:
+                    if not staged:
+                        repair_instruction = (
+                            "The update is incomplete. Stage a complete rewrite of at least one "
+                            "approved existing Wiki page now. Do not create a page."
+                        )
+                elif not any(path.casefold().startswith("sources/") for path in staged):
                     repair_instruction = (
                         "Ingestion is incomplete. Stage the mandatory complete source-summary "
                         "page under sources/ now."
@@ -468,7 +576,12 @@ class WikiAgent:
         else:
             recent_tools = " -> ".join(tool_trace[-12:]) or "none"
             try:
-                self._validate_ingestion(source_path, source_read=source_read, staged=staged)
+                self._validate_ingestion(
+                    source_path,
+                    source_read=source_read,
+                    staged=staged,
+                    writable_existing_pages=writable_existing_pages,
+                )
             except AgentValidationError as exc:
                 logger.warning(
                     "Ingestion step limit reached for %s after %d rounds with invalid staged "
@@ -490,7 +603,12 @@ class WikiAgent:
                 len(staged),
             )
 
-        self._validate_ingestion(source_path, source_read=source_read, staged=staged)
+        self._validate_ingestion(
+            source_path,
+            source_read=source_read,
+            staged=staged,
+            writable_existing_pages=writable_existing_pages,
+        )
         pages_written = tuple(self.repository.commit_ingestion(source_path, staged))
         index_message = ""
         if self.searcher is not None and self.searcher.enabled:
@@ -529,12 +647,20 @@ class WikiAgent:
         *,
         source_read: bool,
         staged: Mapping[str, str],
+        writable_existing_pages: frozenset[str] | None = None,
     ) -> None:
         if not source_read:
             raise AgentValidationError("Ingestion ended without reading the raw source.")
         if not staged:
             raise AgentValidationError("Ingestion ended without staging a knowledge page.")
-        if not any(page_path.casefold().startswith("sources/") for page_path in staged):
+        if writable_existing_pages is not None:
+            disallowed = sorted(set(staged) - writable_existing_pages, key=str.casefold)
+            if disallowed:
+                raise AgentValidationError(
+                    "Manager updates cannot create or rewrite unapproved Wiki pages: "
+                    + ", ".join(disallowed)
+                )
+        elif not any(page_path.casefold().startswith("sources/") for page_path in staged):
             raise AgentValidationError(
                 "Ingestion ended without staging the mandatory source-summary page."
             )

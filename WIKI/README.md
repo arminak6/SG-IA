@@ -170,10 +170,14 @@ applied until the manager replies `Confirm`/`Confermo`; `Cancel`/`Annulla`
 discards the draft. Ambiguous messages receive a clarification question instead
 of being silently routed.
 
-- `update_knowledge` creates an immutable manager-action Markdown source,
-  records the superseded value, and runs normal Wiki ingestion.
+- `update_knowledge` creates an immutable, non-indexed manager-action Markdown
+  audit/provenance source, records the superseded value, and rewrites only an
+  existing canonical Wiki page. The application rejects attempts to create a
+  new Wiki or source-summary page, then replaces the changed page's semantic
+  sections during index refresh.
 - `add_knowledge` creates an immutable manager-action Markdown source without
-  inventing a superseded value, then runs normal Wiki ingestion.
+  inventing a superseded value, then runs normal Wiki ingestion, which creates
+  a source-summary page and may add other useful knowledge pages.
 - `fix_answer` creates no raw source. After confirmation, an isolated review
   must prove the manager correction from existing complete Wiki pages and pass
   the normal evidence guardrail. The application then adds verified guidance to
@@ -196,6 +200,8 @@ shared source corpus and reindexed by RAG.
 
 - `GET /documents` lists pending/ingested sources.
 - `POST /wiki/update` ingests selected pending sources sequentially.
+  Manager `update_knowledge` audit sources are deliberately skipped here so
+  bulk ingestion cannot bypass their existing-page-only write restrictions.
 - `GET /wiki/pages` exposes page summaries and raw provenance.
 - `GET /wiki/lint` checks schema, provenance, links, and index coverage.
 - `GET /wiki/lint` also reports incoming/outgoing graph weaknesses as warnings.

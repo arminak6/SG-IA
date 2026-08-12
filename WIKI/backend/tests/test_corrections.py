@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -238,7 +239,9 @@ class CorrectionWorkflowTests(unittest.TestCase):
                 "skipped": [],
                 "failed": [],
             }
-            with patch.object(service, "update_wiki", return_value=update_result) as update:
+            with patch.object(
+                service, "_update_existing_knowledge", return_value=update_result
+            ) as update:
                 applied = service.ask("Confirm", session_id="manager-1")
 
         self.assertEqual(initial["status"], "answered")
@@ -251,7 +254,13 @@ class CorrectionWorkflowTests(unittest.TestCase):
             "raw/manager-actions/correction123.md",
         )
         self.assertEqual(len(store.calls), 1)
-        update.assert_called_once_with(["raw/manager-actions/correction123.md"])
+        update.assert_called_once_with(
+            "raw/manager-actions/correction123.md",
+            proposal=replace(
+                proposal(), source_path="raw/manager-actions/correction123.md"
+            ),
+            context=interpreter.calls[0][0],
+        )
 
     def test_clarification_blocks_confirmation_and_cancel_preserves_wiki(self) -> None:
         interpreter = FakeCorrectionInterpreter(proposal(needs_clarification=True))

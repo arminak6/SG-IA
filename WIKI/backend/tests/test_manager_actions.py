@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from backend.app.agent import AnswerResult, Citation
+from backend.app.agent import AnswerResult, Citation, IngestionResult
 from backend.app.answer_fixes import AnswerFixPlan
 from backend.app.confidence import ConfidenceEvaluation
 from backend.app.config import BedrockSettings
@@ -119,6 +119,24 @@ class FakeKnowledgeStore:
     def persist_knowledge(self, proposal, context):
         self.calls.append((proposal, context))
         return f"raw/manager-actions/{proposal.action_id}.md"
+
+
+class RecordingKnowledgeAgent:
+    def __init__(self):
+        self.calls = []
+
+    def answer(self, question):
+        return WrongAnswerAgent().answer(question)
+
+    def update_existing_knowledge(self, source_path, *, writable_pages):
+        self.calls.append((source_path, writable_pages))
+        return IngestionResult(
+            source_path=source_path,
+            prompt="Update existing knowledge",
+            pages_written=writable_pages,
+            message="Updated existing knowledge",
+            usage={},
+        )
 
 
 class ManagerActionWorkflowTests(unittest.TestCase):
@@ -266,6 +284,50 @@ The source contains the approved procedure.
             self.assertNotIn("## Superseded value", add_content)
             self.assertIn("## Superseded value", update_content)
             self.assertIn("Old procedure", update_content)
+
+    def test_update_routes_to_existing_canonical_page_without_normal_ingestion(self):
+        with tempfile.TemporaryDirectory() as root:
+            repository = self._repository(root)
+            action_root = repository.raw_root / "manager-actions"
+            action_root.mkdir(parents=True)
+            (action_root / "update_knowledge-123.md").write_text(
+                "Approved updated procedure.", encoding="utf-8"
+            )
+            agent = RecordingKnowledgeAgent()
+            service = self._service(
+                root,
+                repository,
+                action("update_knowledge"),
+                store=FakeKnowledgeStore(),
+            )
+            service._agent = agent
+
+            context = ManagerActionContext(
+                question="What is the procedure?",
+                answer="The old procedure.",
+                citations=(
+                    {
+                        "wiki_path": "concepts/procedure.md",
+                        "source_paths": ["raw/procedure.md"],
+                    },
+                ),
+            )
+            result = service._update_existing_knowledge(
+                "raw/manager-actions/update_knowledge-123.md",
+                proposal=action("update_knowledge"),
+                context=context,
+            )
+
+        self.assertEqual(result["failed"], [])
+        self.assertEqual(
+            agent.calls,
+            [
+                (
+                    "raw/manager-actions/update_knowledge-123.md",
+                    ("concepts/procedure.md",),
+                )
+            ],
+        )
 
 
 if __name__ == "__main__":

@@ -28,7 +28,9 @@ ingested. Never invent facts to make a page look complete.
 
 Use the smallest structure that keeps the knowledge easy to navigate:
 
-- `sources/` — one faithful summary page per ingested raw source.
+- `sources/` — one faithful summary page per normally ingested raw source or
+  approved knowledge addition. Manager `update_knowledge` audit sources are an
+  exception: they update existing Wiki pages and never receive their own page.
 - `concepts/` — reusable explanations, themes, methods, or terminology.
 - `entities/` — people, organizations, products, projects, or other named
   entities when they warrant a durable page.
@@ -69,6 +71,9 @@ Rules:
    addition or factual update only for its stated scope and effective period.
    Preserve older conflicting provenance and label it superseded when the action
    type is `update_knowledge`; do not invent a superseded claim for additions.
+   For `update_knowledge`, rewrite only application-approved pages that existed
+   before the action; never create a Wiki page or a source-summary page. For
+   `add_knowledge`, use normal ingestion and create the required source summary.
 9. For a confirmed `fix_answer`, the application may add manager-reviewed
    guidance to an existing Wiki page only after a separate verifier establishes
    that the corrected answer is fully supported by existing complete Wiki pages.

@@ -450,6 +450,160 @@ Knowledge.
         self.assertTrue(any("source-summary" in text for text in repair_messages))
         self.assertEqual(result.pages_written, ("sources/test-article.md",))
 
+    def test_repeated_manager_updates_rewrite_only_the_existing_page(self) -> None:
+        first_update = wiki_page(
+            title="Sinergia mid-spring meeting",
+            page_type="entity",
+            sources=("raw/meeting.md", "raw/manager-actions/update-1.md"),
+            body=(
+                "The current meeting date is **23 February 2027**. "
+                "The earlier date is superseded."
+            ),
+        )
+        second_update = wiki_page(
+            title="Sinergia mid-spring meeting",
+            page_type="entity",
+            sources=(
+                "raw/meeting.md",
+                "raw/manager-actions/update-1.md",
+                "raw/manager-actions/update-2.md",
+            ),
+            body=(
+                "The current meeting date is **22 February 2027**. "
+                "The 23 February value is superseded."
+            ),
+        )
+        turns = [
+            assistant_turn(
+                {
+                    "toolUse": {
+                        "toolUseId": "read-before-first-update",
+                        "name": "read_wiki_page",
+                        "input": {"path": "entities/meeting.md"},
+                    }
+                }
+            ),
+            assistant_turn(
+                {
+                    "toolUse": {
+                        "toolUseId": "forbidden-create",
+                        "name": "write_wiki_page",
+                        "input": {
+                            "path": "sources/manager-action-update-1.md",
+                            "content": first_update,
+                        },
+                    }
+                }
+            ),
+            assistant_turn(
+                {
+                    "toolUse": {
+                        "toolUseId": "first-existing-update",
+                        "name": "write_wiki_page",
+                        "input": {
+                            "path": "entities/meeting.md",
+                            "content": first_update,
+                        },
+                    }
+                }
+            ),
+            assistant_turn({"text": "Updated the existing page."}),
+            assistant_turn(
+                {
+                    "toolUse": {
+                        "toolUseId": "read-before-second-update",
+                        "name": "read_wiki_page",
+                        "input": {"path": "entities/meeting.md"},
+                    }
+                }
+            ),
+            assistant_turn(
+                {
+                    "toolUse": {
+                        "toolUseId": "second-existing-update",
+                        "name": "write_wiki_page",
+                        "input": {
+                            "path": "entities/meeting.md",
+                            "content": second_update,
+                        },
+                    }
+                }
+            ),
+            assistant_turn({"text": "Updated the existing page again."}),
+        ]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            backend_root = Path(temp_dir) / "backend"
+            raw_root = backend_root / "raw"
+            action_root = raw_root / "manager-actions"
+            action_root.mkdir(parents=True)
+            (raw_root / "meeting.md").write_text(
+                "The original meeting date was 26 February 2027.", encoding="utf-8"
+            )
+            (action_root / "update-1.md").write_text(
+                "Approved update: 23 February 2027.", encoding="utf-8"
+            )
+            (action_root / "update-2.md").write_text(
+                "Approved update: 22 February 2027.", encoding="utf-8"
+            )
+            repository = WikiRepository(backend_root)
+            repository.write_wiki_pages(
+                {
+                    "entities/meeting.md": wiki_page(
+                        title="Sinergia mid-spring meeting",
+                        page_type="entity",
+                        sources=("raw/meeting.md",),
+                        body="The current meeting date is **26 February 2027**.",
+                    )
+                }
+            )
+            paths_before = {page.path for page in repository.list_wiki_pages()}
+            scripted = ScriptedBedrock(turns)
+            agent = WikiAgent(repository, scripted, max_steps=8)
+
+            first = agent.update_existing_knowledge(
+                "raw/manager-actions/update-1.md",
+                writable_pages=("entities/meeting.md",),
+            )
+            second = agent.update_existing_knowledge(
+                "raw/manager-actions/update-2.md",
+                writable_pages=("entities/meeting.md",),
+            )
+
+            paths_after = {page.path for page in repository.list_wiki_pages()}
+            final_page = repository.read_wiki_page("entities/meeting.md")
+
+        self.assertEqual(first.pages_written, ("entities/meeting.md",))
+        self.assertEqual(second.pages_written, ("entities/meeting.md",))
+        self.assertEqual(paths_after, paths_before)
+        self.assertNotIn("sources/manager-action-update-1.md", paths_after)
+        self.assertIn("**22 February 2027**", final_page)
+        self.assertIn("23 February value is superseded", final_page)
+        self.assertIn("Never create a Wiki page", scripted.calls[0]["system_prompt"])
+
+    def test_manager_update_rejects_a_missing_explicit_target_before_model_use(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            backend_root = Path(temp_dir) / "backend"
+            raw_root = backend_root / "raw"
+            action_root = raw_root / "manager-actions"
+            action_root.mkdir(parents=True)
+            (raw_root / "article.txt").write_text("Knowledge", encoding="utf-8")
+            (action_root / "update.md").write_text("Approved update", encoding="utf-8")
+            repository = WikiRepository(backend_root)
+            repository.write_wiki_pages(
+                {"concepts/existing.md": wiki_page(page_type="concept")}
+            )
+            scripted = ScriptedBedrock([])
+            agent = WikiAgent(repository, scripted)
+
+            with self.assertRaisesRegex(AgentValidationError, "target does not exist"):
+                agent.update_existing_knowledge(
+                    "raw/manager-actions/update.md",
+                    writable_pages=("entities/missing.md",),
+                )
+
+        self.assertEqual(scripted.calls, [])
+
     def test_configuration_repr_never_contains_secret(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -620,6 +774,46 @@ Knowledge.
             self.assertEqual(result["summary"]["failed"], 0)
             self.assertIn("warning", result["processed"][0])
             self.assertTrue(repository.is_ingested("raw/article.txt"))
+
+    def test_general_ingestion_cannot_bypass_existing_page_manager_update_flow(self) -> None:
+        class UnexpectedIngestionAgent:
+            def ingest(self, prompt: str) -> IngestionResult:
+                raise AssertionError("Manager update audit source reached normal ingestion")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_root = Path(temp_dir)
+            backend_root = project_root / "backend"
+            action_root = backend_root / "raw" / "manager-actions"
+            action_root.mkdir(parents=True)
+            (action_root / "update.md").write_text(
+                """# Approved Manager Action: Meeting date
+
+- Action type: `update_knowledge`
+
+## Approved knowledge
+
+22 February 2027
+""",
+                encoding="utf-8",
+            )
+            repository = WikiRepository(backend_root)
+            settings = BedrockSettings(
+                project_root=project_root,
+                region_name="eu-west-1",
+                bedrock_model_id="test-model",
+            )
+            service = WikiService(
+                settings,
+                repository=repository,
+                agent=UnexpectedIngestionAgent(),
+            )
+
+            result = service.update_wiki(["manager-actions/update.md"])
+
+        self.assertEqual(result["processed"], [])
+        self.assertEqual(result["failed"], [])
+        self.assertEqual(result["summary"]["skipped"], 1)
+        self.assertIn("existing-page", result["skipped"][0]["reason"])
 
     def test_answer_requires_research_results_before_submission(self) -> None:
         page = wiki_page(body="The answer is 42.")

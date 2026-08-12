@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from collections import OrderedDict
@@ -34,6 +35,14 @@ class WikiService:
     """Coordinate deterministic repository work and sequential LLM operations."""
 
     MAX_CHAT_SESSIONS = 200
+    WIKI_SCOPE_PATH_PATTERN = re.compile(
+        r"(?:sources|concepts|entities|syntheses)/[^\s`'\"<>]+?\.md",
+        flags=re.IGNORECASE,
+    )
+    MANAGER_UPDATE_ACTION_PATTERN = re.compile(
+        r"^- Action type:\s*`update_knowledge`\s*$",
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
 
     def __init__(
         self,
@@ -190,6 +199,17 @@ class WikiService:
                 if document is None:
                     failed.append({"source_path": source_path, "error": "Raw source does not exist."})
                     continue
+                if self._is_manager_update_source(document.source_path):
+                    skipped.append(
+                        {
+                            "source_path": document.source_path,
+                            "reason": (
+                                "Manager update audit sources require the confirmed "
+                                "existing-page update workflow."
+                            ),
+                        }
+                    )
+                    continue
                 # Re-check inside the lock in case another request completed it.
                 if self.repository.is_ingested(document.source_path):
                     skipped.append(
@@ -239,6 +259,16 @@ class WikiService:
                 "failed": len(failed),
             },
         }
+
+    def _is_manager_update_source(self, source_path: str) -> bool:
+        normalized = self.repository.normalize_source_path(source_path)
+        if not normalized.casefold().startswith("raw/manager-actions/"):
+            return False
+        try:
+            content = self.repository.read_raw(normalized)
+        except RepositoryError:
+            return False
+        return self.MANAGER_UPDATE_ACTION_PATTERN.search(content) is not None
 
     def ask(self, question: str, *, session_id: str | None = None) -> dict[str, object]:
         question = str(question).strip()
@@ -473,7 +503,14 @@ class WikiService:
                 started_at=started_at,
             )
 
-        update = self.update_wiki([source_path])
+        if proposal.action_type == "update_knowledge":
+            update = self._update_existing_knowledge(
+                source_path,
+                proposal=proposal,
+                context=session.context,
+            )
+        else:
+            update = self.update_wiki([source_path])
         processed = update.get("processed", [])
         skipped = update.get("skipped", [])
         failed = update.get("failed", [])
@@ -539,6 +576,98 @@ class WikiService:
             citations=citations,
             usage=usage,
         )
+
+    def _update_existing_knowledge(
+        self,
+        source_path: str,
+        *,
+        proposal: ManagerActionProposal,
+        context: ManagerActionContext,
+    ) -> dict[str, object]:
+        """Apply a manager update while making new Wiki paths impossible."""
+
+        writable_pages = self._manager_update_targets(proposal, context)
+        processed: list[dict[str, object]] = []
+        skipped: list[dict[str, str]] = []
+        failed: list[dict[str, str]] = []
+
+        with self._update_lock, self.repository.ingestion_lock():
+            if not self.repository.raw_exists(source_path):
+                return {
+                    "processed": [],
+                    "skipped": [],
+                    "failed": [
+                        {"source_path": source_path, "error": "Raw source does not exist."}
+                    ],
+                }
+            if self.repository.is_ingested(source_path):
+                skipped.append({"source_path": source_path, "reason": "Already ingested."})
+            else:
+                try:
+                    result = self.agent.update_existing_knowledge(
+                        source_path,
+                        writable_pages=writable_pages,
+                    )
+                    processed_item = result.to_dict()
+                    try:
+                        self.repository.append_log(
+                            "update_existing_knowledge",
+                            source_path,
+                            status="success",
+                            pages=result.pages_written,
+                            detail=result.message,
+                        )
+                    except RepositoryError:
+                        processed_item["warning"] = (
+                            "Knowledge was updated, but the operation log could not be updated."
+                        )
+                    processed.append(processed_item)
+                except Exception as exc:
+                    error = str(exc) or type(exc).__name__
+                    failed.append({"source_path": source_path, "error": error})
+                    try:
+                        self.repository.append_log(
+                            "update_existing_knowledge",
+                            source_path,
+                            status="failed",
+                            detail=error,
+                        )
+                    except RepositoryError:
+                        pass
+
+        return {"processed": processed, "skipped": skipped, "failed": failed}
+
+    def _manager_update_targets(
+        self,
+        proposal: ManagerActionProposal,
+        context: ManagerActionContext,
+    ) -> tuple[str, ...]:
+        """Prefer explicit scope paths, then canonical pages cited by the prior answer."""
+
+        explicit = tuple(
+            dict.fromkeys(
+                self.repository.normalize_wiki_path(match, allow_system=False)
+                for match in self.WIKI_SCOPE_PATH_PATTERN.findall(proposal.scope)
+            )
+        )
+        if explicit:
+            return explicit
+
+        cited: list[str] = []
+        for citation in context.citations:
+            value = citation.get("wiki_path") if isinstance(citation, Mapping) else None
+            if not isinstance(value, str):
+                continue
+            try:
+                path = self.repository.normalize_wiki_path(value, allow_system=False)
+                self.repository.read_wiki_page(path)
+            except RepositoryError:
+                continue
+            if path not in cited:
+                cited.append(path)
+
+        canonical = [path for path in cited if not path.casefold().startswith("sources/")]
+        return tuple(canonical or cited)
 
     def _apply_answer_fix(
         self,
