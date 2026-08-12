@@ -167,9 +167,18 @@ Use only the application-supplied previous interaction, draft, and manager messa
 - add_knowledge: the manager supplies genuinely new information absent from maintained knowledge.
 - unclear: the message does not distinguish these cases.
 
+The manager may express a change contextually without command words. For example, a declarative follow-up
+that qualifies the previous fact as tentative, adds an operational requirement to the same subject, or
+replaces part of the previous answer is an update_knowledge candidate. Combine all supplied changes into
+one complete new_value. Use add_knowledge only for a genuinely new standalone subject or record, not for
+an extra detail that belongs to the existing subject. A question or request for explanation is a normal
+follow-up, not a manager action.
+
 Call submit_manager_action exactly once. Never guess between fix_answer and a knowledge change: request
-clarification when ambiguous. Preserve useful draft fields. For time-dependent knowledge changes, require
-the effective period. A normal follow-up question is not a manager action. Never invent domain details.
+clarification when ambiguous, including when it is unclear whether the manager wants to persist a comment.
+Preserve useful draft fields and prior citation scope. For time-dependent knowledge changes, require the
+effective period. If a calendar date is incomplete or invalid without a year, request the missing detail
+instead of inventing it. Never invent domain details.
 """
 
 

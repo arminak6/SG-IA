@@ -373,7 +373,9 @@ class WikiService:
         else:
             guardrail_reasons = confidence.answer_guardrail_reasons()
 
-        guardrail_applied = bool(guardrail_reasons)
+        guardrail_applied = self.settings.answer_guardrail_enabled and bool(
+            guardrail_reasons
+        )
         if guardrail_applied:
             language = confidence.response_language if confidence is not None else "other"
             response.update(
@@ -391,6 +393,7 @@ class WikiService:
             debug["answer_attempts"] = answer_attempts
             debug["answer_retry_applied"] = answer_attempts > 1
             debug["guardrail"] = {
+                "enabled": self.settings.answer_guardrail_enabled,
                 "applied": guardrail_applied,
                 "original_status": result.status,
                 "verification_available": verification_available,
@@ -460,9 +463,15 @@ class WikiService:
                 started_at=started_at,
             )
 
-        should_interpret = pending is not None or self.correction_interpreter.looks_like_action(
+        explicit_action = pending is not None or self.correction_interpreter.looks_like_action(
             message
         )
+        # A manager can qualify or extend the immediately preceding answer
+        # without repeating command words such as "update knowledge". Review
+        # every established-session follow-up in context; the interpreter
+        # returns None for an ordinary question, which then follows normal Q&A.
+        contextual_follow_up = bool(session.context.question and session.context.answer)
+        should_interpret = explicit_action or contextual_follow_up
         if not should_interpret:
             return None
         try:
@@ -473,6 +482,10 @@ class WikiService:
             )
         except Exception as exc:
             logger.warning("Manager action interpretation unavailable (%s)", type(exc).__name__)
+            if pending is None and not explicit_action:
+                # A best-effort contextual classification failure must not
+                # prevent an ordinary follow-up question from reaching Q&A.
+                return None
             return self._correction_response(
                 status="manager_action_error",
                 answer=self._correction_error_message(
@@ -924,6 +937,7 @@ class WikiService:
                 "search_modes": [],
                 "retrieval_diagnostics": [],
                 "guardrail": {
+                    "enabled": self.settings.answer_guardrail_enabled,
                     "applied": False,
                     "original_status": status,
                     "verification_available": False,

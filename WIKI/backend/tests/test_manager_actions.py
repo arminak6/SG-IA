@@ -291,6 +291,29 @@ The source contains the approved procedure.
             allow_manager_knowledge=True,
         )
 
+    def test_contextual_statement_is_interpreted_as_update_without_command_words(self):
+        with tempfile.TemporaryDirectory() as root:
+            repository = self._repository(root)
+            store = FakeKnowledgeStore()
+            service = self._service(
+                root,
+                repository,
+                action("update_knowledge"),
+                store=store,
+            )
+            service.ask("When is the procedure used?", session_id="manager-context")
+
+            proposed = service.ask(
+                "Yes, but it is tentative and employees should be notified in advance.",
+                session_id="manager-context",
+            )
+
+        self.assertEqual(proposed["status"], "manager_action_proposed")
+        self.assertEqual(
+            proposed["manager_action"]["action_type"], "update_knowledge"
+        )
+        self.assertEqual(store.calls, [])
+
     def test_add_then_update_reuses_one_stable_manager_source(self):
         with tempfile.TemporaryDirectory() as root:
             repository = self._repository(root)

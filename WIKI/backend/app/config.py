@@ -33,6 +33,7 @@ class BedrockSettings:
     embedding_model_id: str = "amazon.titan-embed-text-v2:0"
     embedding_dimensions: int = 512
     semantic_search_enabled: bool = True
+    answer_guardrail_enabled: bool = False
     embedding_max_input_characters: int = 45_000
     aws_access_key_id: str | None = field(default=None, repr=False)
     aws_secret_access_key: str | None = field(default=None, repr=False)
@@ -152,6 +153,13 @@ def load_settings(
         ),
         default=True,
     )
+    answer_guardrail_enabled = _boolean(
+        env.get(
+            "LLM_WIKI_ANSWER_GUARDRAIL_ENABLED",
+            file_values.get("answer_guardrail_enabled"),
+        ),
+        default=False,
+    )
     env_access_key = _clean(env.get("AWS_ACCESS_KEY_ID"))
     env_secret_key = _clean(env.get("AWS_SECRET_ACCESS_KEY"))
     env_session_token = _clean(env.get("AWS_SESSION_TOKEN"))
@@ -198,6 +206,7 @@ def load_settings(
         embedding_model_id=embedding_model_id or "amazon.titan-embed-text-v2:0",
         embedding_dimensions=embedding_dimensions,
         semantic_search_enabled=semantic_search_enabled,
+        answer_guardrail_enabled=answer_guardrail_enabled,
         aws_access_key_id=access_key,
         aws_secret_access_key=secret_key,
         aws_session_token=session_token,

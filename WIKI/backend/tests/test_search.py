@@ -346,6 +346,7 @@ Video display work requires regular pauses.""",
                 root,
                 environ={
                     "LLM_WIKI_SEMANTIC_SEARCH_ENABLED": "false",
+                    "LLM_WIKI_ANSWER_GUARDRAIL_ENABLED": "true",
                     "BEDROCK_EMBEDDING_DIMENSIONS": "256",
                 },
             )
@@ -353,7 +354,9 @@ Video display work requires regular pauses.""",
             self.assertEqual(defaults.embedding_model_id, "amazon.titan-embed-text-v2:0")
             self.assertEqual(defaults.embedding_dimensions, 512)
             self.assertTrue(defaults.semantic_search_enabled)
+            self.assertFalse(defaults.answer_guardrail_enabled)
             self.assertFalse(disabled.semantic_search_enabled)
+            self.assertTrue(disabled.answer_guardrail_enabled)
             self.assertEqual(disabled.embedding_dimensions, 256)
 
 

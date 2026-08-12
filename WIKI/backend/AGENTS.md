@@ -113,6 +113,13 @@ because it was read; it must be integrated into the persistent wiki.
 8. The application may restart the complete read-only Q&A operation once after
    a `BedrockError`. Do not extend this into unbounded retries or retry
    non-Bedrock failures; repeated model calls increase latency and cost.
+9. The post-answer evidence verifier is advisory in the POC by default. Its
+   score and warning reasons remain observable; only
+   `LLM_WIKI_ANSWER_GUARDRAIL_ENABLED=true` permits it to replace an answer.
+10. A declarative manager follow-up may qualify or extend the preceding fact
+    without explicit action words. Classify it in the previous-interaction
+    context, show a preview, clarify ambiguous persistence intent or incomplete
+    dates, and never write knowledge before explicit confirmation.
 
 ## Maintenance checks
 

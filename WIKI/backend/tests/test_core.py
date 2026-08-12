@@ -211,6 +211,7 @@ class CoreTests(unittest.TestCase):
                 project_root=Path(temp_dir),
                 region_name="eu-west-1",
                 bedrock_model_id="test-model",
+                answer_guardrail_enabled=True,
             )
             service = WikiService(
                 settings,
@@ -246,6 +247,7 @@ class CoreTests(unittest.TestCase):
                 project_root=Path(temp_dir),
                 region_name="eu-west-1",
                 bedrock_model_id="test-model",
+                answer_guardrail_enabled=True,
             )
             service = WikiService(
                 settings,
@@ -259,6 +261,41 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(answer["citations"], [])
         self.assertEqual(answer["confidence_score"], 9.3)
         self.assertTrue(answer["debug"]["guardrail"]["applied"])
+        self.assertIn(
+            "unsupported_material_claim",
+            answer["debug"]["guardrail"]["reasons"],
+        )
+
+    def test_disabled_guardrail_reports_warning_without_replacing_answer(self) -> None:
+        class AnsweringAgent:
+            def answer(self, question):
+                return AnswerResult(
+                    status="answered",
+                    answer="POC answer retained for review.",
+                    citations=(Citation("concepts/example.md", ("raw/example.txt",)),),
+                    usage={},
+                    pages_read=("concepts/example.md",),
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = BedrockSettings(
+                project_root=Path(temp_dir),
+                region_name="eu-west-1",
+                bedrock_model_id="test-model",
+            )
+            service = WikiService(
+                settings,
+                agent=AnsweringAgent(),
+                confidence_evaluator=RejectingConfidenceEvaluator(),
+            )
+            answer = service.ask("General question")
+
+        self.assertEqual(answer["status"], "answered")
+        self.assertEqual(answer["answer"], "POC answer retained for review.")
+        self.assertEqual(len(answer["citations"]), 1)
+        self.assertEqual(answer["confidence_score"], 4.0)
+        self.assertFalse(answer["debug"]["guardrail"]["enabled"])
+        self.assertFalse(answer["debug"]["guardrail"]["applied"])
         self.assertIn(
             "unsupported_material_claim",
             answer["debug"]["guardrail"]["reasons"],
@@ -280,6 +317,7 @@ class CoreTests(unittest.TestCase):
                 project_root=Path(temp_dir),
                 region_name="eu-west-1",
                 bedrock_model_id="test-model",
+                answer_guardrail_enabled=True,
             )
             service = WikiService(
                 settings,

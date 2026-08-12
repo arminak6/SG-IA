@@ -191,6 +191,14 @@ of being silently routed.
 Conversation drafts are process-memory state and disappear when the API
 restarts. Applied manager actions persist.
 
+After a grounded answer, the backend also sends contextual declarative
+follow-ups through the manager-action interpreter even when they omit command
+words such as `update knowledge`. A qualification such as making a date
+tentative or adding a notification requirement can therefore become an
+`update_knowledge` preview. Questions remain normal Q&A. Ambiguous persistence
+intent or incomplete time data produces a clarification request, and nothing is
+written until explicit confirmation.
+
 This is intentionally a trusted-manager POC, not a production authorization
 model. There is no login, role check, approval queue, rollback UI, or named
 approver identity yet. Do not expose the correction-capable endpoint to
@@ -237,21 +245,16 @@ that abstaining was appropriate. The response text makes that target clear. The
 API returns the number as `confidence_score`, and Streamlit displays only
 `Confidence score: X.X/10` directly below the answer.
 
-The same verifier is an enforced evidence guardrail. A proposed factual answer
-is replaced with `insufficient_knowledge` when it contains an unsupported
-material claim, has claim support below 0.8, covers less than 0.7 of the
-question, has evidence quality below 0.6, or leaves a source conflict
-unexplained. Retrieval agreement contributes to confidence but is not a hard
-gate because lexical-only operation and semantic-search outages remain valid
-operating modes.
-
-Every abstention is reduced to a fixed, concise English or Italian message, and
-citations are removed so loosely related pages cannot appear as answer evidence.
-Consulted pages remain available in `debug.pages_read`, while
-`debug.guardrail` reports whether the gate was applied, the original status,
-verification availability, and stable reason codes. If semantic verification
-fails, the API fails closed to the same citation-free abstention with a null
-score instead of returning an unverified factual answer or a 503.
+For the current POC, the verifier is advisory by default: its score and stable
+warning reasons remain visible, but it does not replace the answer. This keeps
+the model's behavior observable during experiments. Set
+`LLM_WIKI_ANSWER_GUARDRAIL_ENABLED=true` to restore fail-closed enforcement. In
+that mode, a factual answer becomes a citation-free `insufficient_knowledge`
+response when it contains an unsupported material claim, has claim support
+below 0.8, covers less than 0.7 of the question, has evidence quality below 0.6,
+leaves a source conflict unexplained, or verification is unavailable.
+`debug.guardrail` reports whether enforcement was enabled/applied, the original
+status, verification availability, and warning reasons.
 
 ## Tests
 

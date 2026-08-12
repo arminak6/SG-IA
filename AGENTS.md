@@ -152,19 +152,13 @@ when they are agreed.
   after a `BedrockError`, exposes the attempt count in debug metadata, and
   continues to return a sanitized 503 if the retry also fails. Non-Bedrock
   failures are not retried.
-- WIKI chat responses now include an optional 0-10 evidence-confidence score.
-  A separate post-answer Bedrock verification pass checks the answer against
-  its complete cited Wiki pages and combines claim support, question coverage,
-  lexical/semantic retrieval agreement, source consistency, and evidence
-  quality/provenance. Unsupported material claims and unexplained conflicts
-  constrain the result; for insufficient-knowledge responses the score targets
-  confidence in the abstention. The verifier also enforces a fail-closed
-  evidence guardrail: unsupported, weakly supported, materially incomplete, or
-  unexplained-conflict answers become a fixed citation-free
-  `insufficient_knowledge` response; verifier failures do the same without
-  producing a 503. Consulted pages and stable guardrail reasons remain in API
-  debug metadata, while the WIKI Streamlit UI displays only the final score
-  below the answer.
+- WIKI chat responses include an optional 0-10 evidence-confidence score. A
+  separate post-answer Bedrock pass verifies the answer against complete cited
+  Wiki pages and exposes stable warning reasons. For the current POC this gate
+  is advisory by default, so it does not replace the answer;
+  `LLM_WIKI_ANSWER_GUARDRAIL_ENABLED=true` restores fail-closed enforcement.
+  The UI displays the score while API debug metadata preserves verification and
+  enforcement diagnostics.
 - WIKI now routes trusted-manager chat actions into `fix_answer`,
   `update_knowledge`, or `add_knowledge`, always showing a preview and requiring
   explicit `Confirm`/`Confermo`. Additions create one stable subject source
@@ -177,6 +171,10 @@ when they are agreed.
   record under `backend/feedback/answer-fixes/`. Drafts are in memory and all
   persistent paths remain manager-only POC behavior without authentication.
   Approved source knowledge changes must also enter RAG before comparison.
+  Contextual declarative follow-ups are reviewed against the previous answer,
+  so qualifications or added requirements can produce an update preview even
+  without explicit command words. Ambiguous intent and incomplete dates require
+  clarification, and confirmation remains mandatory before any write.
 - `test_QA/mateial/ground_truth_qa.json` is the initial shared evaluation fixture: 25
   Italian questions grounded in the WIKI raw corpus, with required answer
   points, source locators, evidence, and two insufficient-knowledge controls.

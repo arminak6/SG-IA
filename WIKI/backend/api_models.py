@@ -97,6 +97,7 @@ class CitationResponse(ApiModel):
 
 
 class ChatGuardrailResponse(ApiModel):
+    enabled: bool = False
     applied: bool = False
     original_status: str = "answered"
     verification_available: bool = False
