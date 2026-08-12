@@ -108,6 +108,8 @@ class ChatDebugResponse(ApiModel):
     search_queries: List[str] = Field(default_factory=list)
     search_modes: List[str] = Field(default_factory=list)
     retrieval_diagnostics: List[dict[str, object]] = Field(default_factory=list)
+    answer_attempts: int = Field(default=1, ge=1, le=2)
+    answer_retry_applied: bool = False
     guardrail: ChatGuardrailResponse = Field(default_factory=ChatGuardrailResponse)
 
 

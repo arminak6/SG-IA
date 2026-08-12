@@ -108,6 +108,94 @@ sources:
 
 
 class CoreTests(unittest.TestCase):
+    def test_answer_retries_the_complete_read_only_operation_after_bedrock_failure(self) -> None:
+        class FlakyAnswerAgent:
+            def __init__(self):
+                self.calls = 0
+
+            def answer(self, question):
+                self.calls += 1
+                if self.calls == 1:
+                    raise BedrockError(
+                        "Bedrock Converse request failed: ValidationException "
+                        "(ValidationException)."
+                    )
+                return AnswerResult(
+                    status="answered",
+                    answer="The meeting is on 22 February 2027.",
+                    citations=(),
+                    usage={"inputTokens": 3},
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = BedrockSettings(
+                project_root=Path(temp_dir),
+                region_name="eu-west-1",
+                bedrock_model_id="test-model",
+            )
+            agent = FlakyAnswerAgent()
+            service = WikiService(
+                settings,
+                agent=agent,
+                confidence_evaluator=StaticConfidenceEvaluator(),
+            )
+
+            with self.assertLogs("backend.app.service", level="WARNING") as logs:
+                answer = service.ask("When is the meeting?")
+
+        self.assertEqual(answer["status"], "answered")
+        self.assertEqual(agent.calls, 2)
+        self.assertEqual(answer["debug"]["answer_attempts"], 2)
+        self.assertTrue(answer["debug"]["answer_retry_applied"])
+        self.assertIn("retrying the read-only Q&A operation", logs.output[0])
+
+    def test_answer_stops_after_two_bedrock_failures(self) -> None:
+        class FailingAnswerAgent:
+            def __init__(self):
+                self.calls = 0
+
+            def answer(self, question):
+                self.calls += 1
+                raise BedrockError("Bedrock unavailable")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = BedrockSettings(
+                project_root=Path(temp_dir),
+                region_name="eu-west-1",
+                bedrock_model_id="test-model",
+            )
+            agent = FailingAnswerAgent()
+            service = WikiService(settings, agent=agent)
+
+            with self.assertLogs("backend.app.service", level="WARNING"):
+                with self.assertRaises(BedrockError):
+                    service.ask("When is the meeting?")
+
+        self.assertEqual(agent.calls, 2)
+
+    def test_answer_does_not_retry_non_bedrock_failures(self) -> None:
+        class BrokenAnswerAgent:
+            def __init__(self):
+                self.calls = 0
+
+            def answer(self, question):
+                self.calls += 1
+                raise RuntimeError("application bug")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = BedrockSettings(
+                project_root=Path(temp_dir),
+                region_name="eu-west-1",
+                bedrock_model_id="test-model",
+            )
+            agent = BrokenAnswerAgent()
+            service = WikiService(settings, agent=agent)
+
+            with self.assertRaises(RuntimeError):
+                service.ask("When is the meeting?")
+
+        self.assertEqual(agent.calls, 1)
+
     def test_confidence_failure_fails_closed_without_service_error(self) -> None:
         class AnsweringAgent:
             def answer(self, question):

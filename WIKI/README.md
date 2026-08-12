@@ -214,6 +214,11 @@ shared source corpus and reindexed by RAG.
   trusted-manager action preview/confirmation flow and adds an optional
   structured `manager_action` object. `correction` remains as a compatibility
   alias during the POC.
+- Read-only Q&A retries the complete answer-agent operation exactly once when a
+  Bedrock request fails. Successful first attempts have no extra model cost;
+  recovered responses expose `debug.answer_attempts: 2` and
+  `debug.answer_retry_applied: true`. A second Bedrock failure still returns a
+  sanitized 503, and non-Bedrock application errors are never hidden by retries.
 
 ## Answer confidence
 

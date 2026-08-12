@@ -148,6 +148,10 @@ when they are agreed.
   remains the direct Hybrid flow without the evidence-first ledger/verifier.
   API debug data exposes lexical/semantic ranks, selected parent pages, and
   matched sections for evaluation.
+- WIKI read-only Q&A retries the complete answer-agent operation exactly once
+  after a `BedrockError`, exposes the attempt count in debug metadata, and
+  continues to return a sanitized 503 if the retry also fails. Non-Bedrock
+  failures are not retried.
 - WIKI chat responses now include an optional 0-10 evidence-confidence score.
   A separate post-answer Bedrock verification pass checks the answer against
   its complete cited Wiki pages and combines claim support, question coverage,

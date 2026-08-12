@@ -69,6 +69,8 @@ class FakeService:
             "debug": {
                 "pages_read": ["sources/example.md"],
                 "search_queries": ["example"],
+                "answer_attempts": 2,
+                "answer_retry_applied": True,
                 "guardrail": {
                     "applied": False,
                     "original_status": "answered",
@@ -199,6 +201,8 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(payload["status"], "answered")
         self.assertEqual(payload["usage"]["inputTokens"], 12)
         self.assertEqual(payload["debug"]["pages_read"], ["sources/example.md"])
+        self.assertEqual(payload["debug"]["answer_attempts"], 2)
+        self.assertTrue(payload["debug"]["answer_retry_applied"])
 
     def test_chat_rejects_blank_question(self) -> None:
         response = self.client.post("/chat", json={"question": "   "})

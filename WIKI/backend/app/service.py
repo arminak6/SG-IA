@@ -13,7 +13,7 @@ from typing import Mapping, Sequence
 
 from .agent import WikiAgent, build_ingestion_prompt
 from .answer_fixes import AnswerFixReviewer
-from .bedrock import BedrockConverseClient
+from .bedrock import BedrockConverseClient, BedrockError
 from .confidence import ConfidenceEvaluation, ConfidenceEvaluator
 from .config import BedrockSettings, load_settings
 from .manager_actions import (
@@ -35,6 +35,7 @@ class WikiService:
     """Coordinate deterministic repository work and sequential LLM operations."""
 
     MAX_CHAT_SESSIONS = 200
+    MAX_ANSWER_ATTEMPTS = 2
     WIKI_SCOPE_PATH_PATTERN = re.compile(
         r"(?:sources|concepts|entities|syntheses)/[^\s`'\"<>]+?\.md",
         flags=re.IGNORECASE,
@@ -299,16 +300,43 @@ class WikiService:
         return response
 
     def _answer_question(self, question: str, *, started_at: float) -> dict[str, object]:
-        try:
-            result = self.agent.answer(question)
-        except Exception as exc:
+        answer_attempts = 0
+        for attempt in range(1, self.MAX_ANSWER_ATTEMPTS + 1):
+            answer_attempts = attempt
             try:
-                self.repository.append_log(
-                    "query", question or "(empty question)", status="failed", detail=str(exc)
-                )
-            except RepositoryError:
-                pass
-            raise
+                result = self.agent.answer(question)
+                break
+            except BedrockError as exc:
+                if attempt < self.MAX_ANSWER_ATTEMPTS:
+                    logger.warning(
+                        "Wiki answer Bedrock attempt %d/%d failed (%s); retrying the "
+                        "read-only Q&A operation.",
+                        attempt,
+                        self.MAX_ANSWER_ATTEMPTS,
+                        type(exc).__name__,
+                    )
+                    continue
+                try:
+                    self.repository.append_log(
+                        "query",
+                        question or "(empty question)",
+                        status="failed",
+                        detail=str(exc),
+                    )
+                except RepositoryError:
+                    pass
+                raise
+            except Exception as exc:
+                try:
+                    self.repository.append_log(
+                        "query",
+                        question or "(empty question)",
+                        status="failed",
+                        detail=str(exc),
+                    )
+                except RepositoryError:
+                    pass
+                raise
         response = result.to_dict()
         confidence_score: float | None = None
         confidence: ConfidenceEvaluation | None = None
@@ -349,6 +377,8 @@ class WikiService:
 
         debug = response.setdefault("debug", {})
         if isinstance(debug, dict):
+            debug["answer_attempts"] = answer_attempts
+            debug["answer_retry_applied"] = answer_attempts > 1
             debug["guardrail"] = {
                 "applied": guardrail_applied,
                 "original_status": result.status,

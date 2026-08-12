@@ -108,6 +108,9 @@ because it was read; it must be integrated into the persistent wiki.
    calculates the final confidence score in a separate evidence-verification pass.
 7. Never cite a page merely because it is topically related. Every cited page
    must directly support at least one material part of the submitted answer.
+8. The application may restart the complete read-only Q&A operation once after
+   a `BedrockError`. Do not extend this into unbounded retries or retry
+   non-Bedrock failures; repeated model calls increase latency and cost.
 
 ## Maintenance checks
 
