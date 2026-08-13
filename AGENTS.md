@@ -95,7 +95,7 @@ when they are agreed.
   reports, local indexes/databases/models, caches, and editor state. Placeholder
   documentation keeps the intended data directories visible in a fresh clone.
 - `material/` contains the shared candidate corpus in several formats.
-- `RAG/` now has its first API-first ingestion/retrieval milestone. A FastAPI
+- `RAG/` now has an API-first ingestion, retrieval, and grounded-answer flow. A FastAPI
   backend accepts PDF, DOCX, PPTX, Markdown, text, CSV, and JSON uploads;
   performs local ordered Docling extraction for binary office documents;
   creates configurable structure-aware chunks; embeds them with configurable
@@ -104,9 +104,22 @@ when they are agreed.
   indexed document manifest. Content-hash deduplication prevents identical
   uploads from biasing retrieval.
 - `RAG/frontend/` is a strict HTTP client. Its Streamlit UI supports upload,
-  ingestion status, indexed-document inspection, and semantic retrieval debug
-  with scores/page/heading provenance. Grounded answer generation and `/chat`
-  remain the next RAG milestone.
+  ingestion status, indexed-document inspection, semantic retrieval debug, and
+  grounded chat with citations. `POST /chat` embeds each question, retrieves
+  Qdrant chunks, invokes the configured Bedrock generation model, requires a
+  validated structured evidence-ID submission, and returns a comparison-ready
+  answer/status/citation/usage/timing/debug envelope. Unsupported questions
+  return `insufficient_evidence` without citations.
+- `RAG/config/models.json` is the tracked non-secret model registry for Docling
+  extraction components, Titan embeddings, and Bedrock answer generation;
+  environment variables remain deployment overrides. RAG initially uses
+  `openai.gpt-oss-20b-1:0` for answers, matching the current WIKI answer model,
+  and Titan Text Embeddings V2 at 512 dimensions.
+- The local RAG Compose deployment currently retains the agreed 24-document
+  KnowledgeBase comparison subset as 496 verified Qdrant chunks. On 2026-08-13
+  all backend tests passed and live `/chat` checks produced a cited grounded
+  answer for an in-scope Italian question and `insufficient_evidence` for an
+  out-of-scope question.
 - `RAG/compose.yaml` independently starts Qdrant, FastAPI, and Streamlit with
   persistent named volumes. The stack passed local container health checks on
   2026-08-10; backend unit/API tests use fakes and make no AWS calls.
@@ -226,10 +239,11 @@ Do not silently choose these during unrelated work. Resolve them when a task
 depends on them, then update this file:
 
 - LLM Wiki vs Google OKF vs evaluating both for the WIKI approach.
-- Exact documents under `material/` that form the initial comparison corpus.
-- RAG generation model, answer prompt/verification policy, and final `/chat`
-  response contract. The initial embedding/vector/chunking choices are already
-  recorded in `RAG/README.md`.
+- Whether the current 24-document KnowledgeBase subset should become the
+  formally frozen initial comparison corpus rather than the current operational
+  subset.
+- Whether the initial RAG grounded-answer policy needs a separate post-answer
+  verification model beyond the current validated evidence-ID submission.
 - Model/provider and knowledge-generation pipeline for WIKI.
 - Common API request/response schema.
 - Final scoring weights and any expansion of the initial `test_QA/` benchmark.

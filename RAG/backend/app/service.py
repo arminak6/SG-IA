@@ -13,10 +13,15 @@ from .chunking import StructureAwareChunker
 from .config import Settings
 from .embeddings import EmbeddingProvider
 from .extraction import CompositeExtractor, DocumentExtractionError
+from .generation import AnswerGenerator
 from .models import (
+    ChatDebug,
+    ChatResponse,
+    ChatTimings,
     DocumentRecord,
     IngestionJob,
     JobStatus,
+    RagCitation,
     SearchResponse,
 )
 from .repository import LocalRepository
@@ -45,6 +50,7 @@ class RagService:
         extractor: CompositeExtractor,
         chunker: StructureAwareChunker,
         embeddings: EmbeddingProvider,
+        generator: AnswerGenerator,
         vector_store: VectorStore,
     ):
         self.settings = settings
@@ -52,6 +58,7 @@ class RagService:
         self.extractor = extractor
         self.chunker = chunker
         self.embeddings = embeddings
+        self.generator = generator
         self.vector_store = vector_store
         self._accept_lock = threading.Lock()
 
@@ -206,6 +213,90 @@ class RagService:
             hits=hits,
             latency_ms=round((time.perf_counter() - started) * 1000, 2),
             embedding_model_id=self.embeddings.model_id,
+        )
+
+    def chat(
+        self,
+        question: str,
+        *,
+        top_k: int | None,
+        document_ids: list[str] | None,
+        session_id: str | None,
+    ) -> ChatResponse:
+        started = time.perf_counter()
+        requested_top_k = top_k or self.settings.chat_retrieval_top_k
+        retrieval = self.search(
+            question,
+            top_k=requested_top_k,
+            document_ids=document_ids,
+        )
+        retrieval_finished = time.perf_counter()
+        if not retrieval.hits:
+            total_ms = round((retrieval_finished - started) * 1000, 2)
+            return ChatResponse(
+                status="insufficient_evidence",
+                answer="The indexed sources do not contain enough evidence to answer this question.",
+                citations=[],
+                latency_ms=total_ms,
+                timings=ChatTimings(
+                    retrieval_ms=retrieval.latency_ms,
+                    generation_ms=0,
+                    total_ms=total_ms,
+                ),
+                model_id=self.generator.model_id,
+                embedding_model_id=self.embeddings.model_id,
+                debug=ChatDebug(
+                    requested_top_k=requested_top_k,
+                    retrieved_chunks=[],
+                    session_id=session_id,
+                ),
+            )
+
+        generated = self.generator.generate(question, retrieval.hits)
+        finished = time.perf_counter()
+        by_evidence_id = {
+            f"E{position}": hit
+            for position, hit in enumerate(retrieval.hits, start=1)
+        }
+        citations: list[RagCitation] = []
+        for evidence_id in generated.evidence_ids:
+            hit = by_evidence_id[evidence_id]
+            citations.append(
+                RagCitation(
+                    evidence_id=evidence_id,
+                    chunk_id=hit.chunk_id,
+                    document_id=hit.document_id,
+                    source_path=hit.filename,
+                    title=hit.title,
+                    page_numbers=hit.page_numbers,
+                    heading_path=hit.heading_path,
+                    score=hit.score,
+                    excerpt=hit.text[:1_000],
+                )
+            )
+        total_ms = round((finished - started) * 1000, 2)
+        generation_ms = round((finished - retrieval_finished) * 1000, 2)
+        return ChatResponse(
+            status=generated.status,
+            answer=generated.answer,
+            citations=citations,
+            usage=generated.usage,
+            latency_ms=total_ms,
+            timings=ChatTimings(
+                retrieval_ms=retrieval.latency_ms,
+                generation_ms=generation_ms,
+                total_ms=total_ms,
+            ),
+            model_id=self.generator.model_id,
+            embedding_model_id=self.embeddings.model_id,
+            debug=ChatDebug(
+                requested_top_k=requested_top_k,
+                retrieved_chunks=retrieval.hits,
+                cited_chunk_ids=[item.chunk_id for item in citations],
+                generation_attempts=generated.attempts,
+                generation_stop_reason=generated.stop_reason,
+                session_id=session_id,
+            ),
         )
 
     def _validate_upload(self, filename: str, content: bytes) -> str:

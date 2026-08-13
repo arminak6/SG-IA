@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Annotated
 
 from fastapi import (
@@ -13,10 +14,14 @@ from fastapi import (
 )
 from fastapi.middleware.cors import CORSMiddleware
 
+from .generation import AnswerGenerationError
 from .models import (
+    ChatRequest,
+    ChatResponse,
     DocumentRecord,
     HealthResponse,
     IngestionJob,
+    ModelConfigurationResponse,
     SearchRequest,
     SearchResponse,
     UploadAccepted,
@@ -24,10 +29,12 @@ from .models import (
 from .runtime import get_service
 from .service import UploadValidationError
 
+logger = logging.getLogger(__name__)
+
 app = FastAPI(
     title="SG-IA RAG API",
     version="0.1.0",
-    description="API-first document ingestion and vector retrieval for SG-IA RAG.",
+    description="API-first document ingestion, semantic retrieval, and grounded Q&A for SG-IA RAG.",
 )
 app.add_middleware(
     CORSMiddleware,
@@ -47,6 +54,34 @@ def health() -> HealthResponse:
         qdrant="reachable" if qdrant_ok else "unreachable",
         collection=service.settings.qdrant_collection,
         embedding_model_id=service.embeddings.model_id,
+        generation_model_id=service.generator.model_id,
+    )
+
+
+@app.get("/models", response_model=ModelConfigurationResponse)
+def models() -> ModelConfigurationResponse:
+    settings = get_service().settings
+    return ModelConfigurationResponse(
+        extraction={
+            "engine": settings.extraction_engine,
+            "layout_model_id": settings.layout_model_id,
+            "ocr_model_id": settings.ocr_model_id,
+            "table_structure_model_id": settings.table_structure_model_id,
+            "ocr_enabled": settings.docling_do_ocr,
+        },
+        embedding={
+            "provider": "amazon-bedrock",
+            "model_id": settings.embedding_model_id,
+            "dimensions": settings.embedding_dimensions,
+            "normalize": True,
+        },
+        generation={
+            "provider": "amazon-bedrock",
+            "api": "converse",
+            "model_id": settings.generation_model_id,
+            "temperature": settings.generation_temperature,
+            "max_output_tokens": settings.generation_max_output_tokens,
+        },
     )
 
 
@@ -121,4 +156,27 @@ def search(request: SearchRequest) -> SearchResponse:
         raise HTTPException(
             status_code=502,
             detail=f"Retrieval failed ({type(exc).__name__}); see backend logs.",
+        ) from exc
+
+
+@app.post("/chat", response_model=ChatResponse)
+def chat(request: ChatRequest) -> ChatResponse:
+    try:
+        return get_service().chat(
+            request.question,
+            top_k=request.top_k,
+            document_ids=request.document_ids,
+            session_id=request.session_id,
+        )
+    except AnswerGenerationError as exc:
+        logger.exception("RAG answer generation failed")
+        raise HTTPException(
+            status_code=503,
+            detail=f"Answer generation is unavailable ({type(exc).__name__}); see backend logs.",
+        ) from exc
+    except Exception as exc:
+        logger.exception("RAG question processing failed")
+        raise HTTPException(
+            status_code=502,
+            detail=f"RAG question processing failed ({type(exc).__name__}); see backend logs.",
         ) from exc

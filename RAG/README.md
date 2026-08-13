@@ -4,7 +4,8 @@ This directory contains the API-first standard RAG side of the SG-IA
 RAG-versus-LLM-Wiki comparison. It is independently runnable and does not
 import code from `WIKI/`.
 
-The current milestone implements document ingestion and semantic retrieval:
+The current implementation provides document ingestion, semantic retrieval,
+and grounded question answering:
 
 - a FastAPI backend accepts files and reports asynchronous ingestion status;
 - Docling extracts PDF, DOCX, and PPTX locally while preserving ordered
@@ -12,15 +13,12 @@ The current milestone implements document ingestion and semantic retrieval:
 - Markdown, text, CSV, and JSON are read locally as UTF-8 sources;
 - structure-aware chunks are embedded with Amazon Bedrock Titan Text
   Embeddings V2 and stored in Qdrant using cosine similarity;
+- a Bedrock generation model answers only from retrieved evidence and submits
+  the exact chunk IDs used as citations;
+- unsupported questions return `insufficient_evidence` without citations;
 - a Streamlit client uploads documents, monitors jobs, lists indexed sources,
-  and displays retrieved evidence with scores and provenance;
+  displays retrieval diagnostics, and calls the grounded `/chat` API;
 - identical file content is reused instead of indexed twice.
-
-Answer generation is deliberately the next milestone. The future `/chat`
-endpoint will combine retrieved evidence with a Bedrock generation model and
-return a comparison-ready answer/citation/timing envelope. Until then, the
-Streamlit Chat tab explains the boundary and the Retrieval tab exposes what the
-generator would receive.
 
 ## Architecture
 
@@ -29,7 +27,8 @@ Streamlit UI --HTTP--> FastAPI backend
                          |-- local Docling extraction
                          |-- structure-aware chunking
                          |-- Bedrock Titan embeddings
-                         `-- Qdrant cosine retrieval
+                         |-- Qdrant cosine retrieval
+                         `-- grounded Bedrock answer generation
 ```
 
 Streamlit contains no ingestion or retrieval logic. This keeps the backend
@@ -38,9 +37,9 @@ usable by the eventual side-by-side RAG/WIKI interface.
 ## Run everything with Docker
 
 Prerequisites are Docker, Docker Compose, AWS credentials that can invoke the
-configured Bedrock embedding model, and outbound access to the selected AWS
-region. This pipeline calls Bedrock directly. It does **not** upload documents
-to S3 or create any other AWS storage resource.
+configured Bedrock embedding and generation models, and outbound access to the
+selected AWS region. This pipeline calls Bedrock directly. It does **not**
+upload documents to S3 or create any other AWS storage resource.
 
 1. Copy `RAG/.env.example` to `RAG/.env` and add temporary AWS credentials, or
    export them in the shell before starting Compose. Never commit `.env`.
@@ -104,11 +103,13 @@ files matching `*credentials*.json` are ignored by Git.
 | Method | Endpoint | Purpose |
 |---|---|---|
 | `GET` | `/health` | API/Qdrant readiness |
+| `GET` | `/models` | effective non-secret model configuration |
 | `POST` | `/documents` | multipart upload and ingestion queue |
 | `GET` | `/ingestions/{job_id}` | extraction/indexing progress or safe error |
 | `GET` | `/documents` | indexed document manifests |
 | `GET` | `/documents/{document_id}` | one indexed manifest |
 | `POST` | `/search` | semantic chunks, scores, citations, and latency |
+| `POST` | `/chat` | grounded answer, citations, usage, timings, and retrieval debug data |
 
 Example retrieval request:
 
@@ -120,6 +121,24 @@ Example retrieval request:
 }
 ```
 
+Example grounded question request:
+
+```json
+{
+  "question": "Come si inserisce un nuovo utente in SGIA?",
+  "session_id": null,
+  "top_k": 8,
+  "document_ids": null
+}
+```
+
+`/chat` embeds the question, retrieves semantic chunks from Qdrant, passes a
+bounded evidence set to the answer model, and requires a structured
+`submit_grounded_answer` result. The backend rejects unknown citation IDs and
+returns only the chunks selected by the model. The response uses the
+comparison-ready `approach`, `status`, `answer`, `citations`, `usage`,
+`latency_ms`, `timings`, `model_id`, and `debug` fields.
+
 The backend saves a document manifest only after the Qdrant count exactly
 matches the number of generated chunks. If ingestion fails, it removes that
 document's Qdrant points and exposes a sanitized failure through the job API.
@@ -129,11 +148,36 @@ document's Qdrant points and exposes a sanitized failure through the job API.
 - Qdrant is the vector database.
 - Titan Text Embeddings V2 defaults to 512 dimensions and normalized vectors.
 - Qdrant uses cosine distance.
+- the initial answer model is `openai.gpt-oss-20b-1:0`, matching the current
+  WIKI answer model so retrieval architecture can be compared more fairly;
+- generation uses Bedrock Converse tool use, temperature 0.1, and a validated
+  evidence-ID submission rather than trusting free-form citation text;
 - chunks default to approximately 600 tokens with 60-token overlap only when
   an oversized indivisible element must be split;
 - tables, figures, formulas, and code remain atomic where possible;
 - chunk size, overlap, embedding model/dimension, collection, upload limit,
-  OCR, ports, and region are configurable through environment variables.
+  OCR, ports, and region are configurable through the model registry and/or
+  environment variables.
+
+## Model configuration
+
+The tracked [`config/models.json`](config/models.json) is the central,
+non-secret inventory and default configuration for extraction, embedding, and
+generation models. It records:
+
+- Docling plus its layout, RapidOCR, and TableFormer components;
+- the Bedrock embedding model and vector dimensions;
+- the Bedrock generation model, API, temperature, and output limit.
+
+Deployment environment variables override JSON values when present. This keeps
+container-specific configuration possible without editing the tracked file.
+Compose mounts this file read-only into the backend container, so generation
+model or parameter changes take effect after `docker-compose restart rag-api`;
+an image rebuild is not required. Changing the embedding model or dimensions
+still requires a new compatible Qdrant collection name and re-ingestion.
+Docling-managed component identifiers
+are inventory metadata; changing their implementations may also require a
+compatible Docling dependency or extractor-code update.
 
 These are corpus-agnostic starting values, not tuned rules for the current
 benchmark. Any later quality tuning must be evaluated on held-out documents
@@ -141,8 +185,8 @@ and paraphrased questions as required by the repository policy.
 
 ## Privacy and Git
 
-`RAG/data/`, Qdrant storage, model caches, `.env`, credentials, and generated
-artifacts are excluded from Git. Uploaded source bytes and extracted content
-remain local (or in Docker named volumes); only embedding requests are sent
-directly to Amazon Bedrock.
-
+`RAG/material/`, `RAG/data/`, Qdrant storage, model caches, `.env`, credentials,
+and generated artifacts are excluded from Git. Uploaded source bytes and
+extracted content remain local or in Docker named volumes. Embedding inputs and
+the bounded chunks retrieved for each question are sent directly to the
+configured Amazon Bedrock models.

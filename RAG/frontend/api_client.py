@@ -17,6 +17,9 @@ class RagApiClient:
     def health(self) -> dict[str, Any]:
         return self._request("GET", "/health")
 
+    def models(self) -> dict[str, Any]:
+        return self._request("GET", "/models")
+
     def upload(
         self,
         *,
@@ -56,6 +59,26 @@ class RagApiClient:
             },
         )
 
+    def chat(
+        self,
+        *,
+        question: str,
+        top_k: int | None = None,
+        document_ids: list[str] | None = None,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            "/chat",
+            json={
+                "question": question,
+                "top_k": top_k,
+                "document_ids": document_ids or None,
+                "session_id": session_id,
+            },
+            timeout=max(self.timeout, 360),
+        )
+
     def _request(self, method: str, path: str, **kwargs: Any) -> Any:
         timeout = kwargs.pop("timeout", self.timeout)
         try:
@@ -71,4 +94,3 @@ class RagApiClient:
         except ValueError:
             detail = response.text
         raise RagApiError(f"API {response.status_code}: {detail}")
-

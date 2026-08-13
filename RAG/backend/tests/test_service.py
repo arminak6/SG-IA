@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from app.chunking import StructureAwareChunker
+from app.generation import GeneratedAnswer
 from app.models import (
     DocumentElement,
     ElementType,
@@ -44,6 +45,20 @@ class FakeEmbeddings:
 
     def embed_query(self, query: str) -> list[float]:
         return [1.0] + [0.0] * 255
+
+
+class FakeGenerator:
+    model_id = "fake-generation"
+
+    def generate(self, question, evidence) -> GeneratedAnswer:
+        return GeneratedAnswer(
+            status="answered",
+            answer="Two reviewers are required.",
+            evidence_ids=("E1",),
+            usage={"inputTokens": 20, "outputTokens": 5, "totalTokens": 25},
+            stop_reason="tool_use",
+            attempts=1,
+        )
 
 
 class FakeVectorStore:
@@ -94,6 +109,7 @@ def build_service(settings) -> tuple[RagService, FakeVectorStore]:
         extractor=FakeExtractor(),
         chunker=StructureAwareChunker(max_tokens=100, overlap_tokens=10),
         embeddings=FakeEmbeddings(),
+        generator=FakeGenerator(),
         vector_store=vector_store,
     )
     return service, vector_store
@@ -118,6 +134,20 @@ def test_ingestion_is_verified_and_searchable(settings) -> None:
     result = service.search("How many reviewers?", top_k=5, document_ids=None)
     assert result.hits[0].filename == "handbook.txt"
     assert result.hits[0].page_numbers == [1]
+
+    answer = service.chat(
+        "How many reviewers?",
+        top_k=5,
+        document_ids=None,
+        session_id="session-1",
+    )
+    assert answer.approach == "rag"
+    assert answer.status == "answered"
+    assert answer.answer == "Two reviewers are required."
+    assert answer.citations[0].source_path == "handbook.txt"
+    assert answer.citations[0].page_numbers == [1]
+    assert answer.debug.cited_chunk_ids == [answer.citations[0].chunk_id]
+    assert answer.debug.session_id == "session-1"
 
 
 def test_duplicate_content_reuses_indexed_document(settings) -> None:
@@ -148,4 +178,3 @@ def test_unsupported_file_is_rejected(settings) -> None:
         assert "Unsupported file type" in str(exc)
     else:
         raise AssertionError("unsupported file should fail")
-

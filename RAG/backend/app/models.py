@@ -146,8 +146,77 @@ class SearchResponse(BaseModel):
     embedding_model_id: str
 
 
+class ChatRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=10_000)
+    session_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9_.-]+$",
+    )
+    top_k: int | None = Field(default=None, ge=1, le=20)
+    document_ids: list[str] | None = None
+
+    @field_validator("question")
+    @classmethod
+    def normalize_question(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("question must not be blank")
+        return value
+
+
+class RagCitation(BaseModel):
+    evidence_id: str
+    chunk_id: str
+    document_id: str
+    source_path: str
+    title: str
+    page_numbers: list[int] = Field(default_factory=list)
+    heading_path: list[str] = Field(default_factory=list)
+    score: float
+    excerpt: str
+
+
+class ChatTimings(BaseModel):
+    retrieval_ms: float = Field(ge=0)
+    generation_ms: float = Field(ge=0)
+    total_ms: float = Field(ge=0)
+
+
+class ChatDebug(BaseModel):
+    requested_top_k: int
+    retrieved_chunks: list[SearchHit] = Field(default_factory=list)
+    cited_chunk_ids: list[str] = Field(default_factory=list)
+    generation_attempts: int = Field(default=0, ge=0, le=2)
+    generation_stop_reason: str | None = None
+    session_id: str | None = None
+
+
+class ChatResponse(BaseModel):
+    approach: str = "rag"
+    status: str
+    answer: str
+    citations: list[RagCitation] = Field(default_factory=list)
+    usage: dict[str, int] = Field(default_factory=dict)
+    latency_ms: float = Field(ge=0)
+    timings: ChatTimings
+    model_id: str | None = None
+    embedding_model_id: str
+    confidence_score: float | None = Field(default=None, ge=0, le=10)
+    debug: ChatDebug
+
+
+class ModelConfigurationResponse(BaseModel):
+    schema_version: int = 1
+    extraction: dict[str, Any]
+    embedding: dict[str, Any]
+    generation: dict[str, Any]
+
+
 class HealthResponse(BaseModel):
     status: str
     qdrant: str
     collection: str
     embedding_model_id: str
+    generation_model_id: str

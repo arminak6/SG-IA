@@ -6,6 +6,7 @@ from .chunking import StructureAwareChunker
 from .config import Settings
 from .embeddings import BedrockTitanEmbeddingProvider, build_boto3_session
 from .extraction import CompositeExtractor, DoclingExtractor, TextDocumentExtractor
+from .generation import BedrockGroundedAnswerGenerator
 from .repository import LocalRepository
 from .service import RagService
 from .vector_store import QdrantVectorStore
@@ -21,6 +22,13 @@ def build_service(settings: Settings | None = None) -> RagService:
         session=session,
         model_id=settings.embedding_model_id,
         dimension=settings.embedding_dimensions,
+    )
+    generator = BedrockGroundedAnswerGenerator(
+        session=session,
+        model_id=settings.generation_model_id,
+        temperature=settings.generation_temperature,
+        max_output_tokens=settings.generation_max_output_tokens,
+        max_context_characters=settings.chat_max_context_characters,
     )
     return RagService(
         settings=settings,
@@ -40,6 +48,7 @@ def build_service(settings: Settings | None = None) -> RagService:
             overlap_tokens=settings.chunk_overlap_tokens,
         ),
         embeddings=embeddings,
+        generator=generator,
         vector_store=QdrantVectorStore(
             url=settings.qdrant_url,
             collection_name=settings.qdrant_collection,
@@ -51,4 +60,3 @@ def build_service(settings: Settings | None = None) -> RagService:
 @lru_cache(maxsize=1)
 def get_service() -> RagService:
     return build_service()
-

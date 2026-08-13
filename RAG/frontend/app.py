@@ -6,10 +6,10 @@ import streamlit as st
 from api_client import RagApiClient, RagApiError
 
 st.set_page_config(page_title="SG-IA RAG Lab", page_icon="R", layout="wide")
-st.title("SG-IA RAG ingestion and retrieval lab")
+st.title("SG-IA grounded RAG lab")
 st.caption(
-    "Upload source documents through FastAPI, monitor Docling ingestion, and inspect "
-    "the evidence returned by semantic search."
+    "Upload documents through FastAPI, inspect semantic retrieval, and ask grounded "
+    "questions with source citations."
 )
 
 default_api_url = os.getenv("RAG_API_URL", "http://127.0.0.1:8001")
@@ -151,9 +151,79 @@ with retrieval_tab:
                 st.error(str(exc))
 
 with chat_tab:
-    st.subheader("Answer generation is the next milestone")
-    st.info(
-        "The ingestion and retrieval foundation is intentionally testable first. "
-        "The next phase will add a grounded /chat API with citations; this UI will "
-        "call that API and will not contain model logic."
+    st.subheader("Ask the indexed knowledge base")
+    st.write(
+        "The backend retrieves semantic evidence, generates an answer constrained to "
+        "that evidence, and returns the exact chunks cited by the model."
     )
+    chat_documents = st.session_state.get("rag_documents", [])
+    chat_labels = {
+        f"{item['title']} — {item['filename']}": item["document_id"]
+        for item in chat_documents
+    }
+    chat_selected = st.multiselect(
+        "Limit the answer to documents (optional)",
+        options=list(chat_labels),
+        key="chat_document_filter",
+    )
+    with st.form("chat_form"):
+        question = st.text_area("Question", height=120)
+        chat_top_k = st.slider("Evidence chunks", 1, 20, 8)
+        ask = st.form_submit_button("Ask RAG", type="primary")
+    if ask:
+        if not question.strip():
+            st.warning("Enter a question first.")
+        else:
+            try:
+                with st.spinner("Retrieving evidence and generating a grounded answer..."):
+                    response = client.chat(
+                        question=question,
+                        top_k=chat_top_k,
+                        document_ids=[chat_labels[label] for label in chat_selected]
+                        or None,
+                    )
+                if response["status"] == "answered":
+                    st.success("Grounded answer")
+                else:
+                    st.warning("Insufficient evidence")
+                st.write(response["answer"])
+
+                timings = response["timings"]
+                metric_columns = st.columns(3)
+                metric_columns[0].metric("Total", f"{timings['total_ms']:.0f} ms")
+                metric_columns[1].metric(
+                    "Retrieval", f"{timings['retrieval_ms']:.0f} ms"
+                )
+                metric_columns[2].metric(
+                    "Generation", f"{timings['generation_ms']:.0f} ms"
+                )
+
+                st.markdown("#### Citations")
+                if not response["citations"]:
+                    st.caption("No evidence was cited.")
+                for citation in response["citations"]:
+                    pages = ", ".join(
+                        str(value) for value in citation["page_numbers"]
+                    )
+                    label = citation["source_path"]
+                    if pages:
+                        label += f" · pages {pages}"
+                    with st.expander(
+                        f"{citation['evidence_id']} · {label} · score {citation['score']:.3f}"
+                    ):
+                        if citation["heading_path"]:
+                            st.caption(" > ".join(citation["heading_path"]))
+                        st.write(citation["excerpt"])
+                        st.caption(f"Chunk: {citation['chunk_id']}")
+
+                with st.expander("Debug metadata"):
+                    st.json(
+                        {
+                            "model_id": response.get("model_id"),
+                            "embedding_model_id": response["embedding_model_id"],
+                            "usage": response["usage"],
+                            "debug": response["debug"],
+                        }
+                    )
+            except RagApiError as exc:
+                st.error(str(exc))
