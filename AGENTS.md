@@ -85,7 +85,7 @@ normalize. At minimum, plan for these conceptual fields:
 Exact endpoint paths and schemas are not yet frozen. Record the decision here
 when they are agreed.
 
-## Current state (2026-08-11)
+## Current state (2026-08-13)
 
 - The project root is initialized as a `main`-branch Git monorepo containing
   the sibling `RAG/` and `WIKI/` implementations. The root README presents the
@@ -120,6 +120,16 @@ when they are agreed.
   all backend tests passed and live `/chat` checks produced a cited grounded
   answer for an in-scope Italian question and `insufficient_evidence` for an
   out-of-scope question.
+- The initial shared RAG benchmark is
+  `test_QA/RAG/results/20260813T095001Z-3e053d`. It attempted the same 25 cases
+  used for WIKI with GPT-OSS 20B generation and independent Claude Opus 5
+  judging. Twenty-four answers completed and were judged; one structured-answer
+  validation failure persisted after bounded retries. On the 24 judged cases,
+  correctness was 4.38/5, required-point coverage 87.2%, groundedness 94.8%,
+  expected-source recall 81.8%, and 22/24 scored at least 4. Both negative
+  controls abstained correctly. The exact two-page report is
+  `output/pdf/SG-IA_RAG_Two_Page_Executive_Summary.pdf`; detailed Italian and
+  English-labelled audit records are stored in the run directory.
 - `RAG/compose.yaml` independently starts Qdrant, FastAPI, and Streamlit with
   persistent named volumes. The stack passed local container health checks on
   2026-08-10; backend unit/API tests use fakes and make no AWS calls.

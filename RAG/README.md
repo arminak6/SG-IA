@@ -183,6 +183,22 @@ These are corpus-agnostic starting values, not tuned rules for the current
 benchmark. Any later quality tuning must be evaluated on held-out documents
 and paraphrased questions as required by the repository policy.
 
+## Shared 25-question benchmark
+
+`test_QA/RAG/evaluate_rag.py` runs the same Italian fixture and independent
+Claude Opus 5 judging method used for WIKI. It records complete API responses,
+cited RAG chunks, point-level correctness, groundedness, expected-source
+recall, latency, token usage, and a corpus/model reproducibility snapshot.
+
+The 13 August 2026 baseline run is
+`test_QA/RAG/results/20260813T095001Z-3e053d`. Twenty-four of 25 API calls were
+successfully answered and judged; one structured-answer validation failure was
+reproducible after bounded retries. Across the 24 judged cases, average
+correctness was 4.38/5, required-point coverage 87.2%, groundedness 94.8%, and
+expected-source recall 81.8%; 22/24 scored at least 4. Both insufficient-
+knowledge controls abstained correctly. Generated results and reports remain
+ignored by Git.
+
 ## Privacy and Git
 
 `RAG/material/`, `RAG/data/`, Qdrant storage, model caches, `.env`, credentials,

@@ -1,0 +1,23 @@
+{
+  "api_url": "http://127.0.0.1:8001",
+  "dataset": "../mateial/ground_truth_qa.json",
+  "output_dir": "results",
+  "judge": {
+    "model_id": "eu.anthropic.claude-opus-5",
+    "region_name": "eu-central-1",
+    "aws_credentials_file": "../../WIKI/aws_credentials.json",
+    "prompt": "judge_prompt.md",
+    "temperature": null,
+    "max_output_tokens": 4096
+  },
+  "run": {
+    "repetitions": 1,
+    "chat_timeout_seconds": 360,
+    "chat_max_attempts": 3,
+    "chat_retry_delay_seconds": 1.5,
+    "judge_max_attempts": 2,
+    "max_evidence_chars_per_chunk": 12000,
+    "max_total_evidence_chars": 60000
+  },
+  "pricing": {}
+}
