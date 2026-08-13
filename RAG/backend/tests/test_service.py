@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from app.chunking import StructureAwareChunker
+from app.confidence import ConfidenceEvaluation
 from app.generation import GeneratedAnswer
 from app.models import (
     DocumentElement,
@@ -60,6 +61,50 @@ class FakeGenerator:
             stop_reason="tool_use",
             attempts=1,
         )
+
+
+class FakeConfidenceEvaluator:
+    model_id = "fake-confidence"
+
+    def __init__(self) -> None:
+        self.calls = []
+
+    def evaluate(
+        self,
+        question,
+        result,
+        evidence,
+        *,
+        evidence_coverage_ratio,
+        retrieval_attempts,
+    ) -> ConfidenceEvaluation:
+        self.calls.append(
+            {
+                "question": question,
+                "result": result,
+                "evidence": evidence,
+                "coverage": evidence_coverage_ratio,
+                "retrieval_attempts": retrieval_attempts,
+            }
+        )
+        return ConfidenceEvaluation(
+            score=8.7,
+            usage={"inputTokens": 10, "outputTokens": 4, "totalTokens": 14},
+            claim_support=0.9,
+            question_coverage=0.8,
+            source_consistency=1.0,
+            evidence_quality=0.8,
+            abstention_score=1.0,
+            has_unsupported_material_claim=False,
+            has_unexplained_conflict=False,
+        )
+
+
+class BrokenConfidenceEvaluator:
+    model_id = "broken-confidence"
+
+    def evaluate(self, *_args, **_kwargs):
+        raise RuntimeError("private verifier failure")
 
 
 class FakeVectorStore:
@@ -138,7 +183,9 @@ class FakeVectorStore:
         return True
 
 
-def build_service(settings) -> tuple[RagService, FakeVectorStore]:
+def build_service(
+    settings, *, confidence_evaluator=None
+) -> tuple[RagService, FakeVectorStore]:
     vector_store = FakeVectorStore()
     service = RagService(
         settings=settings,
@@ -148,6 +195,7 @@ def build_service(settings) -> tuple[RagService, FakeVectorStore]:
         embeddings=FakeEmbeddings(),
         generator=FakeGenerator(),
         vector_store=vector_store,
+        confidence_evaluator=confidence_evaluator,
     )
     return service, vector_store
 
@@ -188,6 +236,62 @@ def test_ingestion_is_verified_and_searchable(settings) -> None:
     assert answer.debug.retrieval_strategy.endswith("v1.2")
     assert answer.debug.candidate_pool_size == 24
     assert answer.debug.final_context_count == 1
+
+
+def test_chat_adds_advisory_confidence_score_and_verifier_usage(settings) -> None:
+    confidence = FakeConfidenceEvaluator()
+    service, _ = build_service(settings, confidence_evaluator=confidence)
+    accepted = service.accept_upload(
+        filename="handbook.txt",
+        content=b"The approval procedure requires two reviewers.",
+        title="Handbook",
+        media_type="text/plain",
+    )
+    service.ingest(accepted.job.job_id)
+
+    answer = service.chat(
+        "How many reviewers?",
+        top_k=8,
+        document_ids=None,
+        session_id="confidence-session",
+    )
+
+    assert answer.status == "answered"
+    assert answer.confidence_score == 8.7
+    assert answer.usage["totalTokens"] == 39
+    assert answer.debug.confidence.enabled is True
+    assert answer.debug.confidence.verification_available is True
+    assert answer.debug.confidence.model_id == "fake-confidence"
+    assert answer.debug.confidence.components["claim_support"] == 0.9
+    assert answer.timings.verification_ms >= 0
+    assert confidence.calls[0]["question"] == "How many reviewers?"
+
+
+def test_confidence_failure_keeps_grounded_answer_available(settings) -> None:
+    service, _ = build_service(
+        settings,
+        confidence_evaluator=BrokenConfidenceEvaluator(),
+    )
+    accepted = service.accept_upload(
+        filename="handbook.txt",
+        content=b"The approval procedure requires two reviewers.",
+        title="Handbook",
+        media_type="text/plain",
+    )
+    service.ingest(accepted.job.job_id)
+
+    answer = service.chat(
+        "How many reviewers?",
+        top_k=8,
+        document_ids=None,
+        session_id="broken-confidence-session",
+    )
+
+    assert answer.status == "answered"
+    assert answer.answer == "Two reviewers are required."
+    assert answer.confidence_score is None
+    assert answer.debug.confidence.verification_available is False
+    assert answer.debug.confidence.reasons == ["verification_unavailable"]
 
 
 def test_duplicate_content_reuses_indexed_document(settings) -> None:

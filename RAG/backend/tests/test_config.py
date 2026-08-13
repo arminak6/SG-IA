@@ -27,6 +27,12 @@ def test_model_registry_is_loaded_and_environment_can_override(tmp_path, monkeyp
                     "temperature": 0.2,
                     "max_output_tokens": 900,
                 },
+                "verification": {
+                    "enabled": True,
+                    "model_id": "confidence-from-json",
+                    "max_output_tokens": 400,
+                    "max_evidence_characters": 8_000,
+                },
             }
         ),
         encoding="utf-8",
@@ -41,5 +47,9 @@ def test_model_registry_is_loaded_and_environment_can_override(tmp_path, monkeyp
     assert settings.embedding_dimensions == 256
     assert settings.generation_model_id == "generation-from-env"
     assert settings.generation_max_output_tokens == 900
+    assert settings.confidence_enabled is True
+    assert settings.confidence_model_id == "confidence-from-json"
+    assert settings.confidence_max_output_tokens == 400
+    assert settings.confidence_max_evidence_characters == 8_000
     assert settings.layout_model_id == "layout-test"
     assert settings.docling_do_ocr is False

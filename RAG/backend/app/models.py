@@ -181,7 +181,16 @@ class RagCitation(BaseModel):
 class ChatTimings(BaseModel):
     retrieval_ms: float = Field(ge=0)
     generation_ms: float = Field(ge=0)
+    verification_ms: float = Field(default=0, ge=0)
     total_ms: float = Field(ge=0)
+
+
+class ConfidenceDebug(BaseModel):
+    enabled: bool = False
+    verification_available: bool = False
+    model_id: str | None = None
+    reasons: list[str] = Field(default_factory=list)
+    components: dict[str, float | bool] = Field(default_factory=dict)
 
 
 class ChatDebug(BaseModel):
@@ -201,6 +210,7 @@ class ChatDebug(BaseModel):
     cited_chunk_ids: list[str] = Field(default_factory=list)
     generation_attempts: int = Field(default=0, ge=0, le=2)
     generation_stop_reason: str | None = None
+    confidence: ConfidenceDebug = Field(default_factory=ConfidenceDebug)
     session_id: str | None = None
 
 
@@ -226,6 +236,7 @@ class ModelConfigurationResponse(BaseModel):
     chunking: dict[str, Any]
     retrieval: dict[str, Any]
     generation: dict[str, Any]
+    verification: dict[str, Any]
 
 
 class HealthResponse(BaseModel):
@@ -235,3 +246,4 @@ class HealthResponse(BaseModel):
     collection: str
     embedding_model_id: str
     generation_model_id: str
+    confidence_model_id: str | None = None

@@ -3,6 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 
 from .chunking import StructureAwareChunker
+from .confidence import BedrockRagConfidenceEvaluator
 from .config import Settings
 from .embeddings import BedrockTitanEmbeddingProvider, build_boto3_session
 from .extraction import CompositeExtractor, DoclingExtractor, TextDocumentExtractor
@@ -30,6 +31,16 @@ def build_service(settings: Settings | None = None) -> RagService:
         max_output_tokens=settings.generation_max_output_tokens,
         max_context_characters=settings.chat_max_context_characters,
     )
+    confidence_evaluator = (
+        BedrockRagConfidenceEvaluator(
+            session=session,
+            model_id=settings.confidence_model_id,
+            max_output_tokens=settings.confidence_max_output_tokens,
+            max_evidence_characters=settings.confidence_max_evidence_characters,
+        )
+        if settings.confidence_enabled
+        else None
+    )
     return RagService(
         settings=settings,
         repository=LocalRepository(settings),
@@ -49,6 +60,7 @@ def build_service(settings: Settings | None = None) -> RagService:
         ),
         embeddings=embeddings,
         generator=generator,
+        confidence_evaluator=confidence_evaluator,
         vector_store=QdrantVectorStore(
             url=settings.qdrant_url,
             collection_name=settings.qdrant_collection,

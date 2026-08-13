@@ -15,6 +15,8 @@ and grounded question answering:
   Embeddings V2 and stored in Qdrant using cosine similarity;
 - a Bedrock generation model answers only from retrieved evidence and submits
   the exact chunk IDs used as citations;
+- a separate deterministic Bedrock verification pass compares each answer with
+  the retrieved chunks and returns an advisory 0-10 evidence-confidence score;
 - unsupported questions return `insufficient_evidence` without citations;
 - a focused Streamlit client provides one document-upload area and a grounded
   chat, with citations and technical diagnostics kept in optional expanders;
@@ -113,7 +115,7 @@ files matching `*credentials*.json` are ignored by Git.
 | `GET` | `/documents` | indexed document manifests |
 | `GET` | `/documents/{document_id}` | one indexed manifest |
 | `POST` | `/search` | semantic chunks, scores, citations, and latency |
-| `POST` | `/chat` | grounded answer, citations, usage, timings, and retrieval debug data |
+| `POST` | `/chat` | grounded answer, citations, confidence, usage, timings, and retrieval/verification debug data |
 
 Example retrieval request:
 
@@ -147,6 +149,16 @@ returns only the chunks selected by the model. The response uses the
 comparison-ready `approach`, `status`, `answer`, `citations`, `usage`,
 `latency_ms`, `timings`, `model_id`, and `debug` fields.
 
+For answers with retrieved evidence, an isolated post-answer verifier evaluates
+claim support, requested-part coverage, source consistency, and evidence
+quality. The API returns the resulting advisory score as `confidence_score`
+from 0 to 10. Verifier components and stable warning reasons are available at
+`debug.confidence`, while `timings.verification_ms` records its additional
+latency. A verifier outage does not hide an otherwise valid grounded answer:
+the score becomes `null` and debug metadata reports `verification_unavailable`.
+The score measures evidence support for this response; it is not a calibrated
+probability that the answer is true.
+
 The backend saves a document manifest only after the Qdrant count exactly
 matches the number of generated chunks. If ingestion fails, it removes that
 document's Qdrant points and exposes a sanitized failure through the job API.
@@ -158,6 +170,8 @@ document's Qdrant points and exposes a sanitized failure through the job API.
 - Qdrant uses cosine distance.
 - the initial answer model is `openai.gpt-oss-20b-1:0`, matching the current
   WIKI answer model so retrieval architecture can be compared more fairly;
+- confidence is advisory and uses a separate temperature-0 evidence-verifier
+  call, configurable independently from the answer model;
 - generation uses Bedrock Converse tool use, temperature 0.1, and a validated
   evidence-ID submission rather than trusting free-form citation text;
 - generated answers use the question's language even when retrieved evidence
@@ -183,6 +197,7 @@ generation models. It records:
 - Docling plus its layout, RapidOCR, and TableFormer components;
 - the Bedrock embedding model and vector dimensions;
 - the Bedrock generation model, API, temperature, and output limit.
+- the Bedrock evidence-confidence verifier model, limits, and enabled state.
 
 Deployment environment variables override JSON values when present. This keeps
 container-specific configuration possible without editing the tracked file.

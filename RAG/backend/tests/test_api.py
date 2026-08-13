@@ -20,11 +20,16 @@ class FakeApiService:
         )
         self.embeddings = SimpleNamespace(model_id="fake-embeddings")
         self.generator = SimpleNamespace(model_id="fake-generation")
+        self.confidence_evaluator = SimpleNamespace(model_id="fake-confidence")
         self.settings.embedding_model_id = "fake-embeddings"
         self.settings.embedding_dimensions = 256
         self.settings.generation_model_id = "fake-generation"
         self.settings.generation_temperature = 0.1
         self.settings.generation_max_output_tokens = 500
+        self.settings.confidence_enabled = True
+        self.settings.confidence_model_id = "fake-confidence"
+        self.settings.confidence_max_output_tokens = 300
+        self.settings.confidence_max_evidence_characters = 5_000
         self.settings.pipeline_version = "1.2"
         self.settings.chunk_max_tokens = 600
         self.settings.chunk_overlap_tokens = 100
@@ -103,6 +108,8 @@ def test_health_and_upload_contract(monkeypatch) -> None:
     model_config = client.get("/models")
     assert model_config.status_code == 200
     assert model_config.json()["generation"]["model_id"] == "fake-generation"
+    assert model_config.json()["verification"]["model_id"] == "fake-confidence"
+    assert model_config.json()["verification"]["enabled"] is True
     assert model_config.json()["chunking"]["overlap_tokens"] == 100
     assert model_config.json()["retrieval"]["candidate_pool_size"] == 24
 

@@ -10,6 +10,7 @@ import uuid
 from dataclasses import dataclass
 
 from .chunking import StructureAwareChunker
+from .confidence import ConfidenceEvaluator
 from .config import Settings
 from .embeddings import EmbeddingProvider
 from .extraction import CompositeExtractor, DocumentExtractionError
@@ -18,6 +19,7 @@ from .models import (
     ChatDebug,
     ChatResponse,
     ChatTimings,
+    ConfidenceDebug,
     DocumentRecord,
     IngestionJob,
     JobStatus,
@@ -71,6 +73,7 @@ class RagService:
         embeddings: EmbeddingProvider,
         generator: AnswerGenerator,
         vector_store: VectorStore,
+        confidence_evaluator: ConfidenceEvaluator | None = None,
     ):
         self.settings = settings
         self.repository = repository
@@ -78,6 +81,7 @@ class RagService:
         self.chunker = chunker
         self.embeddings = embeddings
         self.generator = generator
+        self.confidence_evaluator = confidence_evaluator
         self.vector_store = vector_store
         self._accept_lock = threading.Lock()
 
@@ -278,11 +282,63 @@ class RagService:
                     evidence_coverage_ratio=retrieval.coverage.ratio,
                     evidence_coverage_sufficient=retrieval.coverage.sufficient,
                     retrieved_chunks=[],
+                    confidence=ConfidenceDebug(
+                        enabled=self.settings.confidence_enabled,
+                        verification_available=False,
+                        model_id=(
+                            self.confidence_evaluator.model_id
+                            if self.confidence_evaluator is not None
+                            else None
+                        ),
+                        reasons=["no_retrieved_evidence"],
+                    ),
                     session_id=session_id,
                 ),
             )
 
         generated = self.generator.generate(question, retrieval.hits)
+        answer_finished = time.perf_counter()
+        usage = dict(generated.usage)
+        confidence_score: float | None = None
+        confidence_debug = ConfidenceDebug(
+            enabled=self.settings.confidence_enabled,
+            verification_available=False,
+            model_id=(
+                self.confidence_evaluator.model_id
+                if self.confidence_evaluator is not None
+                else None
+            ),
+        )
+        if self.settings.confidence_enabled and self.confidence_evaluator is not None:
+            try:
+                confidence = self.confidence_evaluator.evaluate(
+                    question,
+                    generated,
+                    retrieval.hits,
+                    evidence_coverage_ratio=retrieval.coverage.ratio,
+                    retrieval_attempts=retrieval.attempts,
+                )
+                confidence_score = confidence.score
+                for key, value in confidence.usage.items():
+                    usage[key] = usage.get(key, 0) + value
+                confidence_debug = ConfidenceDebug(
+                    enabled=True,
+                    verification_available=True,
+                    model_id=self.confidence_evaluator.model_id,
+                    reasons=list(confidence.warning_reasons()),
+                    components=confidence.components(),
+                )
+            except Exception as exc:
+                logger.warning(
+                    "RAG confidence verification unavailable (%s)",
+                    type(exc).__name__,
+                )
+                confidence_debug = ConfidenceDebug(
+                    enabled=True,
+                    verification_available=False,
+                    model_id=self.confidence_evaluator.model_id,
+                    reasons=["verification_unavailable"],
+                )
         finished = time.perf_counter()
         by_evidence_id = {
             f"E{position}": hit
@@ -305,20 +361,23 @@ class RagService:
                 )
             )
         total_ms = round((finished - started) * 1000, 2)
-        generation_ms = round((finished - retrieval_finished) * 1000, 2)
+        generation_ms = round((answer_finished - retrieval_finished) * 1000, 2)
+        verification_ms = round((finished - answer_finished) * 1000, 2)
         return ChatResponse(
             status=generated.status,
             answer=generated.answer,
             citations=citations,
-            usage=generated.usage,
+            usage=usage,
             latency_ms=total_ms,
             timings=ChatTimings(
                 retrieval_ms=retrieval.latency_ms,
                 generation_ms=generation_ms,
+                verification_ms=verification_ms,
                 total_ms=total_ms,
             ),
             model_id=self.generator.model_id,
             embedding_model_id=self.embeddings.model_id,
+            confidence_score=confidence_score,
             debug=ChatDebug(
                 requested_top_k=requested_top_k,
                 retrieval_strategy="semantic-candidate-neighbor-rerank-coverage-v1.2",
@@ -336,6 +395,7 @@ class RagService:
                 cited_chunk_ids=[item.chunk_id for item in citations],
                 generation_attempts=generated.attempts,
                 generation_stop_reason=generated.stop_reason,
+                confidence=confidence_debug,
                 session_id=session_id,
             ),
         )

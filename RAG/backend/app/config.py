@@ -68,6 +68,10 @@ class Settings:
     generation_model_id: str = "openai.gpt-oss-20b-1:0"
     generation_temperature: float = 0.1
     generation_max_output_tokens: int = 1800
+    confidence_enabled: bool = True
+    confidence_model_id: str = "openai.gpt-oss-20b-1:0"
+    confidence_max_output_tokens: int = 800
+    confidence_max_evidence_characters: int = 60_000
     chat_retrieval_top_k: int = 10
     chat_candidate_pool_size: int = 24
     chat_neighbor_window: int = 1
@@ -112,9 +116,16 @@ class Settings:
         extraction = model_config["extraction"]
         embedding = model_config["embedding"]
         generation = model_config["generation"]
+        verification = model_config.get("verification", {})
         chunking = model_config.get("chunking", {})
         retrieval = model_config.get("retrieval", {})
         credentials_value = os.getenv("RAG_AWS_CREDENTIALS_FILE", "").strip()
+        generation_model_id = _env_or_config(
+            "BEDROCK_GENERATION_MODEL_ID",
+            generation,
+            "model_id",
+            "openai.gpt-oss-20b-1:0",
+        )
         settings = cls(
             data_root=Path(os.getenv("RAG_DATA_ROOT", rag_root / "data")).resolve(),
             qdrant_url=os.getenv("QDRANT_URL", "http://127.0.0.1:6333"),
@@ -146,12 +157,7 @@ class Settings:
             docling_do_ocr=_env_bool(
                 "DOCLING_DO_OCR", bool(_value(extraction, "ocr_enabled", True))
             ),
-            generation_model_id=_env_or_config(
-                "BEDROCK_GENERATION_MODEL_ID",
-                generation,
-                "model_id",
-                "openai.gpt-oss-20b-1:0",
-            ),
+            generation_model_id=generation_model_id,
             generation_temperature=_env_float(
                 "RAG_GENERATION_TEMPERATURE",
                 float(_value(generation, "temperature", 0.1)),
@@ -159,6 +165,24 @@ class Settings:
             generation_max_output_tokens=_env_int(
                 "RAG_GENERATION_MAX_OUTPUT_TOKENS",
                 int(_value(generation, "max_output_tokens", 1800)),
+            ),
+            confidence_enabled=_env_bool(
+                "RAG_CONFIDENCE_ENABLED",
+                bool(_value(verification, "enabled", True)),
+            ),
+            confidence_model_id=_env_or_config(
+                "BEDROCK_CONFIDENCE_MODEL_ID",
+                verification,
+                "model_id",
+                generation_model_id,
+            ),
+            confidence_max_output_tokens=_env_int(
+                "RAG_CONFIDENCE_MAX_OUTPUT_TOKENS",
+                int(_value(verification, "max_output_tokens", 800)),
+            ),
+            confidence_max_evidence_characters=_env_int(
+                "RAG_CONFIDENCE_MAX_EVIDENCE_CHARACTERS",
+                int(_value(verification, "max_evidence_characters", 60_000)),
             ),
             chat_retrieval_top_k=_env_int(
                 "RAG_CHAT_TOP_K", int(_value(retrieval, "final_top_k", 10))
@@ -224,6 +248,14 @@ class Settings:
             raise ValueError("RAG_GENERATION_TEMPERATURE must be between 0 and 1")
         if self.generation_max_output_tokens < 128:
             raise ValueError("RAG_GENERATION_MAX_OUTPUT_TOKENS must be at least 128")
+        if self.confidence_enabled and not self.confidence_model_id:
+            raise ValueError("BEDROCK_CONFIDENCE_MODEL_ID must not be blank")
+        if self.confidence_max_output_tokens < 128:
+            raise ValueError("RAG_CONFIDENCE_MAX_OUTPUT_TOKENS must be at least 128")
+        if self.confidence_max_evidence_characters < 2_000:
+            raise ValueError(
+                "RAG_CONFIDENCE_MAX_EVIDENCE_CHARACTERS must be at least 2000"
+            )
         if not 8 <= self.chat_retrieval_top_k <= 10:
             raise ValueError("RAG_CHAT_TOP_K must be between 8 and 10")
         if not 20 <= self.chat_candidate_pool_size <= 30:

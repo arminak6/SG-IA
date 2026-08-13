@@ -114,6 +114,12 @@ def _render_chat_message(message: Mapping[str, Any]) -> None:
             st.warning(status.replace("_", " ").title())
         st.markdown(str(message["content"]))
 
+        confidence_score = message.get("confidence_score")
+        if isinstance(confidence_score, (int, float)) and not isinstance(
+            confidence_score, bool
+        ):
+            st.markdown(f"**Confidence score: {float(confidence_score):.1f}/10**")
+
         if message.get("role") != "assistant" or message.get("is_greeting"):
             return
 
@@ -274,6 +280,7 @@ if question:
             "content": response["answer"],
             "status": response.get("status", "answered"),
             "citations": response.get("citations", []),
+            "confidence_score": response.get("confidence_score"),
             "timings": response.get("timings", {}),
             "diagnostics": {
                 "model_id": response.get("model_id"),

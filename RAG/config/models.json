@@ -34,5 +34,15 @@
     "model_id": "openai.gpt-oss-20b-1:0",
     "temperature": 0.1,
     "max_output_tokens": 1800
+  },
+  "verification": {
+    "provider": "amazon-bedrock",
+    "api": "converse",
+    "purpose": "rag-evidence-confidence",
+    "enabled": true,
+    "model_id": "openai.gpt-oss-20b-1:0",
+    "temperature": 0.0,
+    "max_output_tokens": 800,
+    "max_evidence_characters": 60000
   }
 }

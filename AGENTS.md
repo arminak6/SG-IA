@@ -110,6 +110,13 @@ when they are agreed.
   comparison-ready answer/status/citation/usage/timing/debug envelope.
   Answers follow the question's language rather than the evidence language;
   unsupported questions return `insufficient_evidence` without citations.
+- RAG answers with retrieved evidence receive an advisory 0-10 confidence score
+  from a separate temperature-0 Bedrock verification pass. It evaluates claim
+  support, question coverage, source consistency, and evidence quality against
+  the actual retrieved chunks. Verifier failure leaves the grounded answer
+  intact with a null score and `verification_unavailable` debug metadata. The
+  RAG UI and comparison UI display the score, while component diagnostics and
+  verifier latency remain available for evaluation.
 - `RAG/config/models.json` is the tracked non-secret model registry for Docling
   extraction components, Titan embeddings, and Bedrock answer generation;
   environment variables remain deployment overrides. RAG initially uses
@@ -282,8 +289,6 @@ depends on them, then update this file:
 - Whether the current 24-document KnowledgeBase subset should become the
   formally frozen initial comparison corpus rather than the current operational
   subset.
-- Whether the initial RAG grounded-answer policy needs a separate post-answer
-  verification model beyond the current validated evidence-ID submission.
 - Model/provider and knowledge-generation pipeline for WIKI.
 - Common API request/response schema.
 - Final scoring weights and any expansion of the initial `test_QA/` benchmark.

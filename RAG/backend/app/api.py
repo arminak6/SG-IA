@@ -56,6 +56,11 @@ def health() -> HealthResponse:
         collection=service.settings.qdrant_collection,
         embedding_model_id=service.embeddings.model_id,
         generation_model_id=service.generator.model_id,
+        confidence_model_id=(
+            service.confidence_evaluator.model_id
+            if service.confidence_evaluator is not None
+            else None
+        ),
     )
 
 
@@ -97,6 +102,16 @@ def models() -> ModelConfigurationResponse:
             "model_id": settings.generation_model_id,
             "temperature": settings.generation_temperature,
             "max_output_tokens": settings.generation_max_output_tokens,
+        },
+        verification={
+            "provider": "amazon-bedrock",
+            "api": "converse",
+            "purpose": "rag-evidence-confidence",
+            "enabled": settings.confidence_enabled,
+            "model_id": settings.confidence_model_id,
+            "temperature": 0.0,
+            "max_output_tokens": settings.confidence_max_output_tokens,
+            "max_evidence_characters": settings.confidence_max_evidence_characters,
         },
     )
 
