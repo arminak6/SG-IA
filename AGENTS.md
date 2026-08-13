@@ -27,9 +27,8 @@ answers simultaneously for direct comparison.
 - `WIKI/backend/` owns wiki ingestion/maintenance, grounded Q&A, and an HTTP
   API for the WIKI approach.
 - `WIKI/frontend/` owns a Streamlit UI used to develop and test WIKI independently.
-- A final comparison interface will call both backend APIs for the same
-  question and display both results together. Its location and framework are
-  still to be decided.
+- `comperision/` owns the Streamlit comparison interface. It calls both backend
+  APIs concurrently for the same question and displays both results together.
 
 Some of these paths may not exist yet. Create them when implementing that
 component; do not treat their absence as a change in the intended architecture.
@@ -263,6 +262,13 @@ when they are agreed.
   `hybrid_section`. Detailed Italian/English records are in that run directory;
   the two-page report is
   `output/pdf/SG-IA_WIKI_Two_Page_Executive_Summary_Hybrid_Section_V2.pdf`.
+- `comperision/` is an independently runnable Streamlit API client. It sends the
+  same question and session ID concurrently to the WIKI and RAG `/chat`
+  endpoints, presents WIKI on the left and RAG on the right, and exposes each
+  system's status, answer, citations, timings, model metadata, and diagnostics.
+  Partial failures are isolated so one unavailable backend does not hide the
+  other's answer. Its Compose service publishes the UI on port 8504 and calls
+  the two existing stacks through their host-published API ports.
 
 ## Decisions still required
 
@@ -278,7 +284,6 @@ depends on them, then update this file:
 - Model/provider and knowledge-generation pipeline for WIKI.
 - Common API request/response schema.
 - Final scoring weights and any expansion of the initial `test_QA/` benchmark.
-- Location/technology of the final side-by-side comparison interface.
 
 ## How to maintain this memory
 

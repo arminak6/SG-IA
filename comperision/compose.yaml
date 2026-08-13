@@ -1,0 +1,17 @@
+name: sgia-comparison
+
+services:
+  comparison-ui:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    init: true
+    environment:
+      RAG_API_URL: ${RAG_API_URL:-http://host.docker.internal:8001}
+      WIKI_API_URL: ${WIKI_API_URL:-http://host.docker.internal:8002}
+      COMPARISON_CHAT_TIMEOUT_SECONDS: ${COMPARISON_CHAT_TIMEOUT_SECONDS:-660}
+    ports:
+      - "${COMPARISON_UI_PORT:-8504}:8501"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

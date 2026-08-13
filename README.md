@@ -18,9 +18,9 @@ and diagnostics side by side.
 | Component | Status | Purpose |
 | --- | --- | --- |
 | `WIKI/` | Working proof of concept | FastAPI backend, persistent Markdown LLM Wiki, hybrid section search with full-page reading, Streamlit UI, ingestion, citations, linting, and tests |
-| `RAG/` | Ingestion/retrieval milestone working | FastAPI document API, local Docling extraction, Bedrock embeddings, Qdrant, Docker Compose, and an API-only Streamlit client |
+| `RAG/` | RAG v1.2 working | FastAPI ingestion, Docling extraction, Bedrock embeddings and generation, Qdrant retrieval/reranking, grounded `/chat`, Docker Compose, and an API-only Streamlit client |
 | `test_QA/` | Evaluation harness available | Shared semantic evaluation design and WIKI benchmark runner |
-| Final comparison UI | Planned | Send one question to both backends and compare the responses |
+| `comperision/` | Working Streamlit client | Concurrently send one question to both backends and compare answers, evidence, timings, and diagnostics side by side |
 
 ## Repository layout
 
@@ -29,6 +29,7 @@ SG-IA/
 |-- material/       Local shared source corpus; private files are not committed
 |-- RAG/            Retrieval-augmented generation implementation
 |-- WIKI/           LLM Wiki implementation
+|-- comperision/    Side-by-side Streamlit API client
 |-- test_QA/        Shared evaluation code and local benchmark fixtures
 |-- output/         Generated reports; not committed
 `-- AGENTS.md       Durable architecture and development decisions
@@ -106,8 +107,23 @@ docker-compose up -d --build
 ```
 
 Open Streamlit at <http://localhost:8502> and FastAPI documentation at
-<http://localhost:8001/docs>. Answer generation is the next milestone; see
-[`RAG/README.md`](RAG/README.md) for API details and privacy notes.
+<http://localhost:8001/docs>. See [`RAG/README.md`](RAG/README.md) for API
+details and privacy notes.
+
+## Side-by-side comparison quick start
+
+After the independently running RAG and WIKI backends have both ingested the
+same source scope, start the comparison client:
+
+```powershell
+cd comperision
+docker-compose up -d --build
+```
+
+Open <http://localhost:8504>. One question is submitted concurrently to both
+`/chat` APIs; LLM Wiki is shown on the left and RAG on the right. See
+[`comperision/README.md`](comperision/README.md) for configuration and local
+development instructions.
 
 ## Evaluation
 
