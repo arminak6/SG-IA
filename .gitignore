@@ -21,6 +21,8 @@
 /material/**
 !/material/README.md
 
+/RAG/material/**
+
 /WIKI/backend/raw/**
 !/WIKI/backend/raw/.gitkeep
 !/WIKI/backend/raw/manager-actions/
