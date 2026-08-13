@@ -184,7 +184,7 @@ class RagApiClient:
             self.last_chat_attempts = attempt
             try:
                 value = self._request(
-                    "POST", "/chat", json={"question": question, "top_k": 8}
+                    "POST", "/chat", json={"question": question, "top_k": 10}
                 )
                 break
             except RagApiResponseError as exc:

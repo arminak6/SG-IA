@@ -257,27 +257,40 @@ class Report:
 def draw_report(run_dir: Path, output_pdf: Path, records: list[dict[str, Any]], summary: dict[str, Any], manifest: dict[str, Any]) -> None:
     judged = [item for item in records if isinstance(item.get("judgment"), dict)]
     scores = Counter(int(item["judgment"]["correctness_score"]) for item in judged)
-    wiki_summary_path = Path(__file__).resolve().parents[2] / "test_QA" / "WIKI" / "results" / "20260810-hybrid-section-v2-consolidated" / "summary.json"
-    wiki_summary = load_json(wiki_summary_path) if wiki_summary_path.is_file() else None
+    high_scores = sum(score >= 4 for score in scores.elements())
+    successful_controls = int(summary["abstention"]["successful_abstentions"])
+    control_count = int(summary["abstention"]["unanswerable_evaluations"])
+    unsupported_count = sum("HALLUCINATION" in item.get("diagnostic_flags", []) for item in records)
+    retrieval_retry_count = sum(
+        int(item.get("chatbot", {}).get("debug", {}).get("retrieval_attempts", 1)) > 1
+        for item in records
+    )
+    baseline_summary_path = (
+        Path(__file__).resolve().parent
+        / "results"
+        / "20260813T095001Z-3e053d"
+        / "summary.json"
+    )
+    baseline_summary = load_json(baseline_summary_path) if baseline_summary_path.is_file() else None
     report = Report(output_pdf)
     c = report.c
 
-    report.header("SG-IA  |  RAG EXECUTIVE EVALUATION")
-    report.title("SG-IA RAG Chatbot", report.height - 66)
+    report.header("SG-IA  |  RAG v1.2 EXECUTIVE EVALUATION")
+    report.title("SG-IA RAG v1.2 Chatbot", report.height - 66)
     c.setFont("Helvetica", 10)
     c.setFillColor(BLUE)
     c.drawString(report.left, report.height - 87, "Two-page executive summary | 25 Italian benchmark questions | 13 August 2026")
     report.band(
         report.height - 100, 30, PALE_AMBER, colors.HexColor("#E49B12"), "DECISION",
-        "Promising for a controlled internal pilot with human review; one structured-answer failure remains before unattended use.",
+        "Ready for a controlled internal pilot with human review; multi-source completeness remains the primary boundary for unattended use.",
     )
     correctness = summary["correctness"]
     grounding = summary["grounding_and_sources"]
     report.kpis(
         report.height - 138,
         [
-            (f"{correctness['average_score_1_to_5']:.2f}/5", "AVERAGE CORRECTNESS · 24 JUDGED", PALE_BLUE),
-            ("22/24", "JUDGED CASES SCORING 4–5", PALE_GREEN),
+            (f"{correctness['average_score_1_to_5']:.2f}/5", f"AVERAGE CORRECTNESS - {len(judged)} JUDGED", PALE_BLUE),
+            (f"{high_scores}/{len(judged)}", "JUDGED CASES SCORING 4-5", PALE_GREEN),
             (f"{100 * correctness['average_required_point_coverage']:.1f}%", "REQUIRED-POINT COVERAGE", PALE_BLUE),
             (f"{100 * grounding['average_groundedness']:.1f}%", "GROUNDEDNESS", PALE_GREEN),
         ],
@@ -313,7 +326,12 @@ def draw_report(run_dir: Path, output_pdf: Path, records: list[dict[str, Any]], 
         c.drawCentredString(x + bar_width / 2, chart_bottom - 13, str(score))
     c.setFont("Helvetica-Oblique", 6.8)
     c.setFillColor(MUTED)
-    c.drawCentredString(report.width / 2, chart_bottom - 29, "Claude Opus 5 judge score (1–5); one API failure is excluded from this chart.")
+    chart_note = (
+        "Claude Opus 5 judge score (1-5); all 25 cases completed and were independently judged."
+        if len(judged) == len(records)
+        else f"Claude Opus 5 judge score (1-5); {len(records) - len(judged)} unjudged case(s) excluded."
+    )
+    c.drawCentredString(report.width / 2, chart_bottom - 29, chart_note)
 
     report.section_title("What the evaluation showed", chart_bottom - 55)
     table_y = chart_bottom - 65
@@ -324,15 +342,19 @@ def draw_report(run_dir: Path, output_pdf: Path, records: list[dict[str, Any]], 
         [
             ["Strong experience", "Observed limitation"],
             [
-                "Direct facts: 4.44/5<br/>Procedures: 4.17/5<br/>Unknown-information controls: 2/2 correct",
-                "Multi-source expected-source recall: 33.3%<br/>Unsupported-claim flags: 5/24<br/>Structured-answer API failures: 1/25",
+                f"Direct facts: {summary['by_question_type']['single_source_fact']['average_correctness_score']:.2f}/5<br/>"
+                f"Procedures: {summary['by_question_type']['procedure']['average_correctness_score']:.2f}/5<br/>"
+                f"Unknown-information controls: {successful_controls}/{control_count} correct",
+                f"Multi-source correctness: {summary['by_question_type']['multi_source_synthesis']['average_correctness_score']:.2f}/5<br/>"
+                f"Multi-source source recall: {100 * summary['by_question_type']['multi_source_synthesis']['average_expected_source_recall']:.1f}%<br/>"
+                f"Unsupported-claim flags: {unsupported_count}/{len(records)}",
             ],
         ],
         [20, 43],
     )
     report.band(
         table_y - 72, 38, PALE_RED, RED, "PRIMARY RISK",
-        "Retrieval and generation are strong overall, but multi-source coverage and structured-output reliability can still produce incomplete or unavailable answers.",
+        "Multi-source list questions can still omit entities or add unsupported details even when the retrieved context appears broadly relevant.",
     )
     report.finish_page(1)
 
@@ -341,7 +363,7 @@ def draw_report(run_dir: Path, output_pdf: Path, records: list[dict[str, Any]], 
     c.setFont("Helvetica-Bold", 10.5)
     c.setFillColor(NAVY)
     c.drawString(90, y_top, "Quality by question type")
-    c.drawString(344, y_top, "RAG vs WIKI (directional)")
+    c.drawString(344, y_top, "v1.2 vs v1 baseline (directional)")
     groups = summary["by_question_type"]
     labels = [
         ("Unknown controls", groups.get("unanswerable", {}).get("average_correctness_score")),
@@ -365,38 +387,38 @@ def draw_report(run_dir: Path, output_pdf: Path, records: list[dict[str, Any]], 
         c.drawString(bar_x + 130 * value / 5 + 5, yy, f"{value:.2f}")
 
     compare_metrics = [
-        ("Correctness /5", correctness["average_score_1_to_5"], wiki_summary["correctness"]["average_score_1_to_5"] if wiki_summary else None),
-        ("Point coverage", 100 * correctness["average_required_point_coverage"], 100 * wiki_summary["correctness"]["average_required_point_coverage"] if wiki_summary else None),
-        ("Groundedness", 100 * grounding["average_groundedness"], 100 * wiki_summary["grounding_and_sources"]["average_groundedness"] if wiki_summary else None),
-        ("Source recall", 100 * grounding["average_expected_source_recall"], 100 * wiki_summary["grounding_and_sources"]["average_expected_source_recall"] if wiki_summary else None),
+        ("Correctness /5", correctness["average_score_1_to_5"], baseline_summary["correctness"]["average_score_1_to_5"] if baseline_summary else None),
+        ("Point coverage", 100 * correctness["average_required_point_coverage"], 100 * baseline_summary["correctness"]["average_required_point_coverage"] if baseline_summary else None),
+        ("Groundedness", 100 * grounding["average_groundedness"], 100 * baseline_summary["grounding_and_sources"]["average_groundedness"] if baseline_summary else None),
+        ("Source recall", 100 * grounding["average_expected_source_recall"], 100 * baseline_summary["grounding_and_sources"]["average_expected_source_recall"] if baseline_summary else None),
     ]
     cx, cw = 342, 190
-    for index, (label, rag_value, wiki_value) in enumerate(compare_metrics):
+    for index, (label, rag_value, baseline_value) in enumerate(compare_metrics):
         yy = y_top - 25 - index * 38
         c.setFont("Helvetica", 6.7)
         c.setFillColor(MUTED)
         c.drawString(cx, yy + 13, label)
         max_value = 5 if label.endswith("/5") else 100
         c.setFillColor(colors.HexColor("#D7E3EE"))
-        c.rect(cx, yy, cw * float(wiki_value or 0) / max_value, 7, fill=1, stroke=0)
+        c.rect(cx, yy, cw * float(baseline_value or 0) / max_value, 7, fill=1, stroke=0)
         c.setFillColor(BLUE)
         c.rect(cx, yy - 9, cw * float(rag_value) / max_value, 7, fill=1, stroke=0)
         c.setFont("Helvetica-Bold", 6.2)
         c.setFillColor(INK)
         suffix = "" if label.endswith("/5") else "%"
-        c.drawRightString(cx + cw, yy + 1, f"W {float(wiki_value or 0):.1f}{suffix}")
-        c.drawRightString(cx + cw, yy - 8, f"R {float(rag_value):.1f}{suffix}")
+        c.drawRightString(cx + cw, yy + 1, f"v1 {float(baseline_value or 0):.1f}{suffix}")
+        c.drawRightString(cx + cw, yy - 8, f"v1.2 {float(rag_value):.1f}{suffix}")
     c.setFont("Helvetica-Oblique", 6.5)
     c.setFillColor(MUTED)
-    c.drawCentredString(report.width / 2, y_top - 188, "Directional only: single stochastic runs; RAG quality metrics exclude one API failure.")
+    c.drawCentredString(report.width / 2, y_top - 188, "Directional only: one stochastic run per version; v1 had 24 judged cases and v1.2 had 25.")
 
     report.section_title("Operational experience", y_top - 218, 12)
     latency = summary["latency_ms"]
     report.kpis(
         y_top - 228,
         [
-            ("24/25", "COMPLETED AND JUDGED", PALE_AMBER),
-            ("2/2", "CORRECT NEGATIVE CONTROLS", PALE_GREEN),
+            (f"{summary['judge_successes']}/{len(records)}", "COMPLETED AND JUDGED", PALE_GREEN),
+            (f"{successful_controls}/{control_count}", "CORRECT NEGATIVE CONTROLS", PALE_GREEN),
             (f"{latency['server_median'] / 1000:.2f} s", "MEDIAN SERVER LATENCY", PALE_BLUE),
             (f"{latency['server_p95'] / 1000:.2f} s", "P95 SERVER LATENCY", PALE_BLUE),
         ],
@@ -409,9 +431,9 @@ def draw_report(run_dir: Path, output_pdf: Path, records: list[dict[str, Any]], 
         [40, 272, report.right - report.left - 312],
         [
             ["Priority", "Action", "Success measure"],
-            ["P0", "Add a provider-compatible structured-output fallback and retain bounded retries.", "100% completion across three repeated 25-case runs"],
-            ["P1", "Improve multi-source retrieval with query expansion or diversified parent-document selection.", "At least 95% expected-source recall"],
-            ["P1", "Tighten claim-to-citation validation before returning the final answer.", "Unsupported-claim flag rate at or below 5%"],
+            ["P0", "Add a list/entity completeness gate for multi-source answers; regenerate or abstain when requested facets lack evidence.", "Multi-source score at least 4/5; source recall at least 90%"],
+            ["P1", "Upgrade token-facet coverage to stemmed or semantic subquestion coverage, keeping one bounded retry.", "Fewer unnecessary retries with no loss of point coverage"],
+            ["P1", "Add claim-level citation entailment before returning the final answer.", "Unsupported-claim flag rate at or below 5%"],
             ["P2", "Validate on paraphrased questions and held-out documents with human review.", "Stable quality without benchmark-specific tuning"],
         ],
         [18, 31, 31, 31, 31],
@@ -421,10 +443,10 @@ def draw_report(run_dir: Path, output_pdf: Path, records: list[dict[str, Any]], 
         "Allow low-risk internal factual and procedural queries with visible citations. Require human verification for policy, safety, financial, HR, and multi-source decisions.",
     )
     method = (
-        f"Method: one response per question from RAG / GPT-OSS 20B; Titan V2 512-dimensional embeddings; "
-        f"top-k 8 over {manifest['corpus_manifest']['document_count']} documents and "
+        f"Method: one response per question from RAG v1.2 / GPT-OSS 20B; Titan V2 512-dimensional embeddings; "
+        f"24 semantic candidates, same-section neighbor expansion, reranking, and top-k 10 over {manifest['corpus_manifest']['document_count']} documents and "
         f"{manifest['corpus_manifest']['chunk_count']} chunks. Independently judged by Claude Opus 5 on Amazon Bedrock. "
-        f"Run {run_dir.name}; 24/25 answers completed after bounded retries. Chatbot usage: "
+        f"Run {run_dir.name}; {summary['api_successes']}/{len(records)} answers completed; coverage retry used in {retrieval_retry_count}/{len(records)} cases. Chatbot usage: "
         f"{summary['usage']['chatbot'].get('totalTokens', 0) / 1000:.0f}K tokens; judge usage: "
         f"{summary['usage']['judge'].get('totalTokens', 0) / 1000:.0f}K tokens. Costs not inferred without pinned pricing."
     )

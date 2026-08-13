@@ -22,9 +22,17 @@ from .models import (
     IngestionJob,
     JobStatus,
     RagCitation,
+    SearchHit,
     SearchResponse,
 )
 from .repository import LocalRepository
+from .retrieval import (
+    CoverageAssessment,
+    assess_coverage,
+    merge_hits,
+    rerank_hits,
+    retry_query,
+)
 from .vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
@@ -39,6 +47,17 @@ class AcceptedUpload:
     job: IngestionJob
     duplicate: bool
     schedule_ingestion: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ChatRetrieval:
+    hits: list[SearchHit]
+    latency_ms: float
+    candidate_pool_size: int
+    initial_candidate_count: int
+    neighbor_candidate_count: int
+    attempts: int
+    coverage: CoverageAssessment
 
 
 class RagService:
@@ -225,9 +244,9 @@ class RagService:
     ) -> ChatResponse:
         started = time.perf_counter()
         requested_top_k = top_k or self.settings.chat_retrieval_top_k
-        retrieval = self.search(
-            question,
-            top_k=requested_top_k,
+        retrieval = self._retrieve_for_chat(
+            question=question,
+            final_top_k=requested_top_k,
             document_ids=document_ids,
         )
         retrieval_finished = time.perf_counter()
@@ -247,6 +266,17 @@ class RagService:
                 embedding_model_id=self.embeddings.model_id,
                 debug=ChatDebug(
                     requested_top_k=requested_top_k,
+                    retrieval_strategy="semantic-candidate-neighbor-rerank-coverage-v1.2",
+                    candidate_pool_size=retrieval.candidate_pool_size,
+                    initial_candidate_count=retrieval.initial_candidate_count,
+                    neighbor_candidate_count=retrieval.neighbor_candidate_count,
+                    final_context_count=0,
+                    retrieval_attempts=retrieval.attempts,
+                    coverage_facets=list(retrieval.coverage.facets),
+                    covered_facets=list(retrieval.coverage.covered_facets),
+                    missing_facets=list(retrieval.coverage.missing_facets),
+                    evidence_coverage_ratio=retrieval.coverage.ratio,
+                    evidence_coverage_sufficient=retrieval.coverage.sufficient,
                     retrieved_chunks=[],
                     session_id=session_id,
                 ),
@@ -291,12 +321,87 @@ class RagService:
             embedding_model_id=self.embeddings.model_id,
             debug=ChatDebug(
                 requested_top_k=requested_top_k,
+                retrieval_strategy="semantic-candidate-neighbor-rerank-coverage-v1.2",
+                candidate_pool_size=retrieval.candidate_pool_size,
+                initial_candidate_count=retrieval.initial_candidate_count,
+                neighbor_candidate_count=retrieval.neighbor_candidate_count,
+                final_context_count=len(retrieval.hits),
+                retrieval_attempts=retrieval.attempts,
+                coverage_facets=list(retrieval.coverage.facets),
+                covered_facets=list(retrieval.coverage.covered_facets),
+                missing_facets=list(retrieval.coverage.missing_facets),
+                evidence_coverage_ratio=retrieval.coverage.ratio,
+                evidence_coverage_sufficient=retrieval.coverage.sufficient,
                 retrieved_chunks=retrieval.hits,
                 cited_chunk_ids=[item.chunk_id for item in citations],
                 generation_attempts=generated.attempts,
                 generation_stop_reason=generated.stop_reason,
                 session_id=session_id,
             ),
+        )
+
+    def _retrieve_for_chat(
+        self,
+        *,
+        question: str,
+        final_top_k: int,
+        document_ids: list[str] | None,
+    ) -> ChatRetrieval:
+        started = time.perf_counter()
+        candidate_pool_size = self.settings.chat_candidate_pool_size
+        initial = self.search(
+            question,
+            top_k=candidate_pool_size,
+            document_ids=document_ids,
+        ).hits
+        candidates = list(initial)
+        seeds = rerank_hits(question, candidates, limit=final_top_k)
+        neighbors = self.vector_store.neighbors(
+            seeds, window=self.settings.chat_neighbor_window
+        )
+        expanded = merge_hits(candidates, neighbors)
+        final_hits = rerank_hits(question, expanded, limit=final_top_k)
+        coverage = assess_coverage(
+            question,
+            final_hits,
+            minimum_ratio=self.settings.chat_coverage_min_ratio,
+        )
+        attempts = 1
+
+        if (
+            initial
+            and self.settings.chat_coverage_retry_enabled
+            and self.settings.chat_max_retrieval_attempts > 1
+            and not coverage.sufficient
+        ):
+            attempts = 2
+            retry = self.search(
+                retry_query(question, coverage),
+                top_k=candidate_pool_size,
+                document_ids=document_ids,
+            ).hits
+            candidates = merge_hits(candidates, retry)
+            retry_seeds = rerank_hits(question, candidates, limit=final_top_k)
+            retry_neighbors = self.vector_store.neighbors(
+                retry_seeds, window=self.settings.chat_neighbor_window
+            )
+            neighbors = merge_hits(neighbors, retry_neighbors)
+            expanded = merge_hits(candidates, neighbors)
+            final_hits = rerank_hits(question, expanded, limit=final_top_k)
+            coverage = assess_coverage(
+                question,
+                final_hits,
+                minimum_ratio=self.settings.chat_coverage_min_ratio,
+            )
+
+        return ChatRetrieval(
+            hits=final_hits,
+            latency_ms=round((time.perf_counter() - started) * 1000, 2),
+            candidate_pool_size=candidate_pool_size,
+            initial_candidate_count=len(initial),
+            neighbor_candidate_count=len(neighbors),
+            attempts=attempts,
+            coverage=coverage,
         )
 
     def _validate_upload(self, filename: str, content: bytes) -> str:

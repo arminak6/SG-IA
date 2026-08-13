@@ -20,7 +20,7 @@ def estimate_tokens(text: str) -> int:
 
 
 class StructureAwareChunker:
-    def __init__(self, max_tokens: int = 600, overlap_tokens: int = 60):
+    def __init__(self, max_tokens: int = 600, overlap_tokens: int = 100):
         if max_tokens < 50:
             raise ValueError("max_tokens must be at least 50")
         if not 0 <= overlap_tokens < max_tokens:
@@ -150,4 +150,3 @@ class StructureAwareChunker:
     @staticmethod
     def _join_text(elements: list[DocumentElement]) -> str:
         return "\n\n".join(element.text.strip() for element in elements if element.text.strip())
-

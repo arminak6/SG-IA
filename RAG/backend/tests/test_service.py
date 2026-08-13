@@ -12,6 +12,7 @@ from app.models import (
     JobStatus,
     RagChunk,
     SearchHit,
+    SearchResponse,
 )
 from app.repository import LocalRepository
 from app.service import RagService, UploadValidationError
@@ -97,6 +98,42 @@ class FakeVectorStore:
             for chunk in chunks[:limit]
         ]
 
+    def neighbors(self, hits: Sequence[SearchHit], *, window: int) -> list[SearchHit]:
+        if window <= 0:
+            return []
+        by_document = {
+            document_id: {chunk.ordinal: chunk for chunk in chunks}
+            for document_id, chunks in self.chunks.items()
+        }
+        result: list[SearchHit] = []
+        seen = {hit.chunk_id for hit in hits}
+        for hit in hits:
+            ordinal = int(hit.metadata.get("ordinal", 0))
+            for neighbor_ordinal in range(max(0, ordinal - window), ordinal + window + 1):
+                chunk = by_document.get(hit.document_id, {}).get(neighbor_ordinal)
+                if chunk is None or chunk.chunk_id in seen or chunk.heading_path != hit.heading_path:
+                    continue
+                result.append(
+                    SearchHit(
+                        chunk_id=chunk.chunk_id,
+                        document_id=chunk.document_id,
+                        filename=chunk.filename,
+                        title=chunk.title,
+                        score=0.9,
+                        text=chunk.text,
+                        page_numbers=chunk.page_numbers,
+                        heading_path=chunk.heading_path,
+                        content_types=[item.value for item in chunk.content_types],
+                        metadata={
+                            "ordinal": chunk.ordinal,
+                            "retrieval_origin": "neighbor",
+                            "neighbor_of_chunk_ids": [hit.chunk_id],
+                        },
+                    )
+                )
+                seen.add(chunk.chunk_id)
+        return result
+
     def health(self) -> bool:
         return True
 
@@ -148,6 +185,9 @@ def test_ingestion_is_verified_and_searchable(settings) -> None:
     assert answer.citations[0].page_numbers == [1]
     assert answer.debug.cited_chunk_ids == [answer.citations[0].chunk_id]
     assert answer.debug.session_id == "session-1"
+    assert answer.debug.retrieval_strategy.endswith("v1.2")
+    assert answer.debug.candidate_pool_size == 24
+    assert answer.debug.final_context_count == 1
 
 
 def test_duplicate_content_reuses_indexed_document(settings) -> None:
@@ -178,3 +218,48 @@ def test_unsupported_file_is_rejected(settings) -> None:
         assert "Unsupported file type" in str(exc)
     else:
         raise AssertionError("unsupported file should fail")
+
+
+def test_chat_retries_retrieval_once_when_numeric_facets_are_missing(
+    settings, monkeypatch
+) -> None:
+    service, _ = build_service(settings)
+    calls: list[str] = []
+
+    def fake_search(query: str, *, top_k: int, document_ids: list[str] | None):
+        calls.append(query)
+        text = (
+            "Milestones in 2005, 2010 and 2020."
+            if len(calls) == 2
+            else "Milestones in 2010 and 2020."
+        )
+        return SearchResponse(
+            query=query,
+            hits=[
+                SearchHit(
+                    chunk_id=f"chunk-{len(calls)}",
+                    document_id="doc-1",
+                    filename="history.txt",
+                    title="History",
+                    score=0.8,
+                    text=text,
+                    heading_path=["Milestones"],
+                    metadata={"ordinal": len(calls)},
+                )
+            ],
+            latency_ms=1,
+            embedding_model_id="fake-embeddings",
+        )
+
+    monkeypatch.setattr(service, "search", fake_search)
+    monkeypatch.setattr(service.vector_store, "neighbors", lambda hits, window: [])
+
+    retrieval = service._retrieve_for_chat(
+        question="List the milestones in 2005, 2010 and 2020.",
+        final_top_k=5,
+        document_ids=None,
+    )
+
+    assert retrieval.attempts == 2
+    assert retrieval.coverage.sufficient is True
+    assert "2005" in calls[1]

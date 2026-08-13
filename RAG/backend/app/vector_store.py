@@ -16,6 +16,7 @@ class VectorStore(Protocol):
     def search(
         self, vector: Sequence[float], *, limit: int, document_ids: list[str] | None = None
     ) -> list[SearchHit]: ...
+    def neighbors(self, hits: Sequence[SearchHit], *, window: int) -> list[SearchHit]: ...
     def health(self) -> bool: ...
 
 
@@ -162,6 +163,76 @@ class QdrantVectorStore:
         )
         return [self._hit(point) for point in response.points]
 
+    def neighbors(self, hits: Sequence[SearchHit], *, window: int) -> list[SearchHit]:
+        if window <= 0 or not hits or not self.client.collection_exists(self.collection_name):
+            return []
+        models = self._models()
+        requested: dict[str, set[int]] = {}
+        seeds_by_document: dict[str, list[SearchHit]] = {}
+        existing_ids = {hit.chunk_id for hit in hits}
+        for hit in hits:
+            ordinal = int(hit.metadata.get("ordinal", 0))
+            seeds_by_document.setdefault(hit.document_id, []).append(hit)
+            values = requested.setdefault(hit.document_id, set())
+            values.update(
+                value
+                for value in range(max(0, ordinal - window), ordinal + window + 1)
+                if value != ordinal
+            )
+
+        neighbors: list[SearchHit] = []
+        for document_id, ordinals in requested.items():
+            if not ordinals:
+                continue
+            records, _ = self.client.scroll(
+                collection_name=self.collection_name,
+                scroll_filter=models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="document_id", match=models.MatchValue(value=document_id)
+                        ),
+                        models.FieldCondition(
+                            key="ordinal", match=models.MatchAny(any=sorted(ordinals))
+                        ),
+                    ]
+                ),
+                limit=len(ordinals),
+                with_payload=True,
+                with_vectors=False,
+            )
+            for record in records:
+                payload = record.payload or {}
+                chunk_id = str(payload.get("chunk_id", record.id))
+                if chunk_id in existing_ids:
+                    continue
+                heading_path = [str(value) for value in payload.get("heading_path", [])]
+                ordinal = int(payload.get("ordinal", 0))
+                related = [
+                    seed
+                    for seed in seeds_by_document.get(document_id, [])
+                    if abs(int(seed.metadata.get("ordinal", 0)) - ordinal) <= window
+                    and heading_path
+                    and heading_path == seed.heading_path
+                ]
+                if not related:
+                    continue
+                semantic_score = max(
+                    float(seed.metadata.get("semantic_score", seed.score)) for seed in related
+                )
+                hit = self._hit_from_payload(
+                    payload,
+                    point_id=record.id,
+                    score=max(0.0, semantic_score * 0.97),
+                )
+                metadata = dict(hit.metadata)
+                metadata.update(
+                    retrieval_origin="neighbor",
+                    neighbor_of_chunk_ids=[seed.chunk_id for seed in related],
+                )
+                neighbors.append(hit.model_copy(update={"metadata": metadata}))
+                existing_ids.add(chunk_id)
+        return neighbors
+
     def health(self) -> bool:
         try:
             self.client.get_collections()
@@ -192,12 +263,20 @@ class QdrantVectorStore:
     @staticmethod
     def _hit(point: Any) -> SearchHit:
         payload = point.payload or {}
+        return QdrantVectorStore._hit_from_payload(
+            payload, point_id=point.id, score=float(point.score)
+        )
+
+    @staticmethod
+    def _hit_from_payload(
+        payload: dict[str, Any], *, point_id: Any, score: float
+    ) -> SearchHit:
         return SearchHit(
-            chunk_id=str(payload.get("chunk_id", point.id)),
+            chunk_id=str(payload.get("chunk_id", point_id)),
             document_id=str(payload.get("document_id", "")),
             filename=str(payload.get("filename", "")),
             title=str(payload.get("title", "")),
-            score=float(point.score),
+            score=score,
             text=str(payload.get("text", "")),
             page_numbers=[int(value) for value in payload.get("page_numbers", [])],
             heading_path=[str(value) for value in payload.get("heading_path", [])],

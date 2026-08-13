@@ -168,7 +168,7 @@ with chat_tab:
     )
     with st.form("chat_form"):
         question = st.text_area("Question", height=120)
-        chat_top_k = st.slider("Evidence chunks", 1, 20, 8)
+        chat_top_k = st.slider("Final evidence chunks", 8, 10, 10)
         ask = st.form_submit_button("Ask RAG", type="primary")
     if ask:
         if not question.strip():

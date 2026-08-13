@@ -25,6 +25,15 @@ class FakeApiService:
         self.settings.generation_model_id = "fake-generation"
         self.settings.generation_temperature = 0.1
         self.settings.generation_max_output_tokens = 500
+        self.settings.pipeline_version = "1.2"
+        self.settings.chunk_max_tokens = 600
+        self.settings.chunk_overlap_tokens = 100
+        self.settings.chat_candidate_pool_size = 24
+        self.settings.chat_retrieval_top_k = 10
+        self.settings.chat_neighbor_window = 1
+        self.settings.chat_coverage_retry_enabled = True
+        self.settings.chat_coverage_min_ratio = 0.8
+        self.settings.chat_max_retrieval_attempts = 2
         self.settings.extraction_engine = "docling"
         self.settings.layout_model_id = "layout"
         self.settings.ocr_model_id = "ocr"
@@ -86,6 +95,7 @@ def test_health_and_upload_contract(monkeypatch) -> None:
     assert health.status_code == 200
     assert health.json()["qdrant"] == "reachable"
     assert health.json()["generation_model_id"] == "fake-generation"
+    assert health.json()["pipeline_version"] == "1.2"
     assert upload.status_code == 202
     assert upload.json()["job"]["document_id"] == "doc-1"
     assert service.ingested == ["job-1"]
@@ -93,11 +103,16 @@ def test_health_and_upload_contract(monkeypatch) -> None:
     model_config = client.get("/models")
     assert model_config.status_code == 200
     assert model_config.json()["generation"]["model_id"] == "fake-generation"
+    assert model_config.json()["chunking"]["overlap_tokens"] == 100
+    assert model_config.json()["retrieval"]["candidate_pool_size"] == 24
 
     chat = client.post("/chat", json={"question": "What is the rule?"})
     assert chat.status_code == 200
     assert chat.json()["approach"] == "rag"
     assert chat.json()["answer"] == "Grounded: What is the rule?"
+    assert client.post(
+        "/chat", json={"question": "What is the rule?", "top_k": 5}
+    ).status_code == 422
 
 
 def test_missing_resources_return_404(monkeypatch) -> None:

@@ -127,13 +127,17 @@ Example grounded question request:
 {
   "question": "Come si inserisce un nuovo utente in SGIA?",
   "session_id": null,
-  "top_k": 8,
+  "top_k": 10,
   "document_ids": null
 }
 ```
 
-`/chat` embeds the question, retrieves semantic chunks from Qdrant, passes a
-bounded evidence set to the answer model, and requires a structured
+`/chat` embeds the question, retrieves 24 semantic candidates from Qdrant,
+reranks them, expands adjacent chunks inside the same document section, and
+passes the best 8–10 evidence chunks to the answer model. Before generation, a
+deterministic corpus-agnostic coverage check compares requested question facets
+with the evidence. When coverage is incomplete, retrieval is retried once with
+the missing facets before generation. The answer model then requires a structured
 `submit_grounded_answer` result. The backend rejects unknown citation IDs and
 returns only the chunks selected by the model. The response uses the
 comparison-ready `approach`, `status`, `answer`, `citations`, `usage`,
@@ -152,8 +156,13 @@ document's Qdrant points and exposes a sanitized failure through the job API.
   WIKI answer model so retrieval architecture can be compared more fairly;
 - generation uses Bedrock Converse tool use, temperature 0.1, and a validated
   evidence-ID submission rather than trusting free-form citation text;
-- chunks default to approximately 600 tokens with 60-token overlap only when
+- chunks default to approximately 600 tokens with 100-token overlap only when
   an oversized indivisible element must be split;
+- RAG v1.2 retrieves 24 initial semantic candidates, combines semantic and
+  lexical evidence coverage during reranking, expands same-section neighbours,
+  and sends 10 final chunks by default;
+- a pre-generation coverage check can make one bounded retrieval retry when
+  numeric or lexical question facets are missing from the final context;
 - tables, figures, formulas, and code remain atomic where possible;
 - chunk size, overlap, embedding model/dimension, collection, upload limit,
   OCR, ports, and region are configurable through the model registry and/or
@@ -198,6 +207,14 @@ correctness was 4.38/5, required-point coverage 87.2%, groundedness 94.8%, and
 expected-source recall 81.8%; 22/24 scored at least 4. Both insufficient-
 knowledge controls abstained correctly. Generated results and reports remain
 ignored by Git.
+
+The v1.2 run is `test_QA/RAG/results/20260813T115206Z-4a98ba`. All 25 API and
+judge calls completed. Average correctness was 4.52/5, required-point coverage
+90.4%, groundedness 96.2%, expected-source recall 89.1%, and 23/25 cases scored
+at least 4. Both insufficient-knowledge controls abstained correctly and there
+were no false abstentions. This is one stochastic run, not a statistical
+conclusion. Its report is
+`output/pdf/SG-IA_RAG_Two_Page_Executive_Summary_V1_2.pdf`.
 
 ## Privacy and Git
 

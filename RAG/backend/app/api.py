@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="SG-IA RAG API",
-    version="0.1.0",
+    version="1.2.0",
     description="API-first document ingestion, semantic retrieval, and grounded Q&A for SG-IA RAG.",
 )
 app.add_middleware(
@@ -51,6 +51,7 @@ def health() -> HealthResponse:
     qdrant_ok = service.vector_store.health()
     return HealthResponse(
         status="ok" if qdrant_ok else "degraded",
+        pipeline_version=service.settings.pipeline_version,
         qdrant="reachable" if qdrant_ok else "unreachable",
         collection=service.settings.qdrant_collection,
         embedding_model_id=service.embeddings.model_id,
@@ -62,6 +63,7 @@ def health() -> HealthResponse:
 def models() -> ModelConfigurationResponse:
     settings = get_service().settings
     return ModelConfigurationResponse(
+        pipeline_version=settings.pipeline_version,
         extraction={
             "engine": settings.extraction_engine,
             "layout_model_id": settings.layout_model_id,
@@ -74,6 +76,20 @@ def models() -> ModelConfigurationResponse:
             "model_id": settings.embedding_model_id,
             "dimensions": settings.embedding_dimensions,
             "normalize": True,
+        },
+        chunking={
+            "strategy": "structure-aware",
+            "max_tokens": settings.chunk_max_tokens,
+            "overlap_tokens": settings.chunk_overlap_tokens,
+        },
+        retrieval={
+            "strategy": "semantic-candidate-neighbor-rerank-coverage-v1.2",
+            "candidate_pool_size": settings.chat_candidate_pool_size,
+            "final_top_k": settings.chat_retrieval_top_k,
+            "neighbor_window": settings.chat_neighbor_window,
+            "coverage_retry_enabled": settings.chat_coverage_retry_enabled,
+            "coverage_min_ratio": settings.chat_coverage_min_ratio,
+            "max_attempts": settings.chat_max_retrieval_attempts,
         },
         generation={
             "provider": "amazon-bedrock",

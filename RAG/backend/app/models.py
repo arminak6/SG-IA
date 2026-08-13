@@ -154,7 +154,7 @@ class ChatRequest(BaseModel):
         max_length=128,
         pattern=r"^[A-Za-z0-9_.-]+$",
     )
-    top_k: int | None = Field(default=None, ge=1, le=20)
+    top_k: int | None = Field(default=None, ge=8, le=10)
     document_ids: list[str] | None = None
 
     @field_validator("question")
@@ -186,6 +186,17 @@ class ChatTimings(BaseModel):
 
 class ChatDebug(BaseModel):
     requested_top_k: int
+    retrieval_strategy: str = "semantic"
+    candidate_pool_size: int = 0
+    initial_candidate_count: int = 0
+    neighbor_candidate_count: int = 0
+    final_context_count: int = 0
+    retrieval_attempts: int = Field(default=1, ge=1, le=2)
+    coverage_facets: list[str] = Field(default_factory=list)
+    covered_facets: list[str] = Field(default_factory=list)
+    missing_facets: list[str] = Field(default_factory=list)
+    evidence_coverage_ratio: float | None = Field(default=None, ge=0, le=1)
+    evidence_coverage_sufficient: bool | None = None
     retrieved_chunks: list[SearchHit] = Field(default_factory=list)
     cited_chunk_ids: list[str] = Field(default_factory=list)
     generation_attempts: int = Field(default=0, ge=0, le=2)
@@ -209,13 +220,17 @@ class ChatResponse(BaseModel):
 
 class ModelConfigurationResponse(BaseModel):
     schema_version: int = 1
+    pipeline_version: str = "1.2"
     extraction: dict[str, Any]
     embedding: dict[str, Any]
+    chunking: dict[str, Any]
+    retrieval: dict[str, Any]
     generation: dict[str, Any]
 
 
 class HealthResponse(BaseModel):
     status: str
+    pipeline_version: str = "1.2"
     qdrant: str
     collection: str
     embedding_model_id: str

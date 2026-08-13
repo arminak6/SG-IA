@@ -68,8 +68,14 @@ class Settings:
     generation_model_id: str = "openai.gpt-oss-20b-1:0"
     generation_temperature: float = 0.1
     generation_max_output_tokens: int = 1800
-    chat_retrieval_top_k: int = 8
+    chat_retrieval_top_k: int = 10
+    chat_candidate_pool_size: int = 24
+    chat_neighbor_window: int = 1
+    chat_coverage_retry_enabled: bool = True
+    chat_coverage_min_ratio: float = 0.8
+    chat_max_retrieval_attempts: int = 2
     chat_max_context_characters: int = 60_000
+    pipeline_version: str = "1.2"
     extraction_engine: str = "docling"
     layout_model_id: str = "docling-default-layout"
     ocr_model_id: str = "rapidocr-pp-ocrv6"
@@ -106,6 +112,8 @@ class Settings:
         extraction = model_config["extraction"]
         embedding = model_config["embedding"]
         generation = model_config["generation"]
+        chunking = model_config.get("chunking", {})
+        retrieval = model_config.get("retrieval", {})
         credentials_value = os.getenv("RAG_AWS_CREDENTIALS_FILE", "").strip()
         settings = cls(
             data_root=Path(os.getenv("RAG_DATA_ROOT", rag_root / "data")).resolve(),
@@ -124,8 +132,12 @@ class Settings:
                 "BEDROCK_EMBEDDING_DIMENSIONS",
                 int(_value(embedding, "dimensions", 512)),
             ),
-            chunk_max_tokens=_env_int("RAG_CHUNK_MAX_TOKENS", 600),
-            chunk_overlap_tokens=_env_int("RAG_CHUNK_OVERLAP_TOKENS", 60),
+            chunk_max_tokens=_env_int(
+                "RAG_CHUNK_MAX_TOKENS", int(_value(chunking, "max_tokens", 600))
+            ),
+            chunk_overlap_tokens=_env_int(
+                "RAG_CHUNK_OVERLAP_TOKENS", int(_value(chunking, "overlap_tokens", 100))
+            ),
             max_upload_bytes=_env_int("RAG_MAX_UPLOAD_BYTES", 100 * 1024 * 1024),
             max_document_pages=_env_int("RAG_MAX_DOCUMENT_PAGES", 500),
             max_extracted_characters=_env_int(
@@ -148,7 +160,29 @@ class Settings:
                 "RAG_GENERATION_MAX_OUTPUT_TOKENS",
                 int(_value(generation, "max_output_tokens", 1800)),
             ),
-            chat_retrieval_top_k=_env_int("RAG_CHAT_TOP_K", 8),
+            chat_retrieval_top_k=_env_int(
+                "RAG_CHAT_TOP_K", int(_value(retrieval, "final_top_k", 10))
+            ),
+            chat_candidate_pool_size=_env_int(
+                "RAG_CHAT_CANDIDATE_POOL_SIZE",
+                int(_value(retrieval, "candidate_pool_size", 24)),
+            ),
+            chat_neighbor_window=_env_int(
+                "RAG_CHAT_NEIGHBOR_WINDOW",
+                int(_value(retrieval, "neighbor_window", 1)),
+            ),
+            chat_coverage_retry_enabled=_env_bool(
+                "RAG_CHAT_COVERAGE_RETRY_ENABLED",
+                bool(_value(retrieval, "coverage_retry_enabled", True)),
+            ),
+            chat_coverage_min_ratio=_env_float(
+                "RAG_CHAT_COVERAGE_MIN_RATIO",
+                float(_value(retrieval, "coverage_min_ratio", 0.8)),
+            ),
+            chat_max_retrieval_attempts=_env_int(
+                "RAG_CHAT_MAX_RETRIEVAL_ATTEMPTS",
+                int(_value(retrieval, "max_attempts", 2)),
+            ),
             chat_max_context_characters=_env_int(
                 "RAG_CHAT_MAX_CONTEXT_CHARACTERS", 60_000
             ),
@@ -172,6 +206,7 @@ class Settings:
                 if credentials_value
                 else None
             ),
+            pipeline_version=str(model_config.get("pipeline_version", "1.2")),
         )
         settings.validate()
         return settings
@@ -189,8 +224,16 @@ class Settings:
             raise ValueError("RAG_GENERATION_TEMPERATURE must be between 0 and 1")
         if self.generation_max_output_tokens < 128:
             raise ValueError("RAG_GENERATION_MAX_OUTPUT_TOKENS must be at least 128")
-        if not 1 <= self.chat_retrieval_top_k <= 20:
-            raise ValueError("RAG_CHAT_TOP_K must be between 1 and 20")
+        if not 8 <= self.chat_retrieval_top_k <= 10:
+            raise ValueError("RAG_CHAT_TOP_K must be between 8 and 10")
+        if not 20 <= self.chat_candidate_pool_size <= 30:
+            raise ValueError("RAG_CHAT_CANDIDATE_POOL_SIZE must be between 20 and 30")
+        if not 0 <= self.chat_neighbor_window <= 3:
+            raise ValueError("RAG_CHAT_NEIGHBOR_WINDOW must be between 0 and 3")
+        if not 0.5 <= self.chat_coverage_min_ratio <= 1:
+            raise ValueError("RAG_CHAT_COVERAGE_MIN_RATIO must be between 0.5 and 1")
+        if self.chat_max_retrieval_attempts not in {1, 2}:
+            raise ValueError("RAG_CHAT_MAX_RETRIEVAL_ATTEMPTS must be 1 or 2")
         if self.chat_max_context_characters < 2_000:
             raise ValueError("RAG_CHAT_MAX_CONTEXT_CHARACTERS must be at least 2000")
 

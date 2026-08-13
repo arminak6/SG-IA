@@ -130,6 +130,27 @@ when they are agreed.
   controls abstained correctly. The exact two-page report is
   `output/pdf/SG-IA_RAG_Two_Page_Executive_Summary.pdf`; detailed Italian and
   English-labelled audit records are stored in the run directory.
+- RAG retrieval pipeline version 1.2 is the current post-baseline
+  implementation. It uses a 100-token overlap for oversized split units,
+  retrieves 24 semantic candidates, expands adjacent chunks only within the
+  same document section, combines semantic rank with lexical question-facet
+  coverage and diversity to rerank 8-10 final chunks, and performs at most one
+  targeted retrieval retry when deterministic evidence-coverage checks find
+  missing facets. The existing 24-document corpus was reindexed and verified
+  as 496 Qdrant chunks with these chunking settings. Live regression checks
+  answered the previous color, multi-year history, and activity-overlap failure
+  patterns correctly.
+- The full RAG v1.2 benchmark is
+  `test_QA/RAG/results/20260813T115206Z-4a98ba`. All 25 chatbot and independent
+  Claude Opus 5 judge calls completed. Results were 4.52/5 correctness, 90.4%
+  required-point coverage, 96.2% groundedness, 89.1% expected-source recall,
+  and 23/25 cases scoring at least 4. Both negative controls abstained correctly
+  and no answerable case falsely abstained. The remaining incorrect case was a
+  multi-source entity-list answer; one policy answer was partially correct.
+  This is one stochastic comparison, not a statistical conclusion. The exact
+  two-page report is
+  `output/pdf/SG-IA_RAG_Two_Page_Executive_Summary_V1_2.pdf`; detailed Italian
+  and English-labelled audit records are stored in the run directory.
 - `RAG/compose.yaml` independently starts Qdrant, FastAPI, and Streamlit with
   persistent named volumes. The stack passed local container health checks on
   2026-08-10; backend unit/API tests use fakes and make no AWS calls.
