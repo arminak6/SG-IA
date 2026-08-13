@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import pytest
-from app.generation import AnswerGenerationError, BedrockGroundedAnswerGenerator
+from app.generation import (
+    SYSTEM_PROMPT,
+    AnswerGenerationError,
+    BedrockGroundedAnswerGenerator,
+)
 from app.models import SearchHit
 
 
@@ -82,6 +86,34 @@ def test_grounded_submission_uses_only_valid_evidence() -> None:
     assert request["modelId"] == "fake-generation"
     assert request["toolConfig"]["tools"][0]["toolSpec"]["name"] == "submit_grounded_answer"
     assert "Two reviewers" in request["messages"][0]["content"][0]["text"]
+
+
+def test_request_requires_question_language_not_evidence_language() -> None:
+    client = FakeBedrockClient(
+        [
+            response(
+                {
+                    "status": "answered",
+                    "answer": "The policy requires two reviewers.",
+                    "evidence_ids": ["E1"],
+                }
+            )
+        ]
+    )
+
+    generator(client).generate("What does the policy require?", [hit()])
+
+    request = client.requests[0]
+    user_instruction = request["messages"][0]["content"][0]["text"]
+    answer_schema = request["toolConfig"]["tools"][0]["toolSpec"]["inputSchema"][
+        "json"
+    ]["properties"]["answer"]
+    normalized_system_prompt = " ".join(SYSTEM_PROMPT.split())
+    assert "only from the user's question" in normalized_system_prompt
+    assert "Do not switch to the evidence's language" in normalized_system_prompt
+    assert "language used by the question" in user_instruction
+    assert "translating evidence when needed" in user_instruction
+    assert "same language as the user's question" in answer_schema["description"]
 
 
 def test_invalid_citation_is_retried_once() -> None:

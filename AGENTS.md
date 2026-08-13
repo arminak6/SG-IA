@@ -102,13 +102,14 @@ when they are agreed.
   verifies their storage in a Qdrant cosine collection before publishing an
   indexed document manifest. Content-hash deduplication prevents identical
   uploads from biasing retrieval.
-- `RAG/frontend/` is a strict HTTP client. Its Streamlit UI supports upload,
-  ingestion status, indexed-document inspection, semantic retrieval debug, and
-  grounded chat with citations. `POST /chat` embeds each question, retrieves
-  Qdrant chunks, invokes the configured Bedrock generation model, requires a
-  validated structured evidence-ID submission, and returns a comparison-ready
-  answer/status/citation/usage/timing/debug envelope. Unsupported questions
-  return `insufficient_evidence` without citations.
+- `RAG/frontend/` is a strict HTTP client. Its simplified Streamlit UI focuses
+  on one document-upload area and grounded chat, with compact ingestion status
+  and citations/diagnostics in optional expanders. `POST /chat` embeds each
+  question, retrieves Qdrant chunks, invokes the configured Bedrock generation
+  model, requires a validated structured evidence-ID submission, and returns a
+  comparison-ready answer/status/citation/usage/timing/debug envelope.
+  Answers follow the question's language rather than the evidence language;
+  unsupported questions return `insufficient_evidence` without citations.
 - `RAG/config/models.json` is the tracked non-secret model registry for Docling
   extraction components, Titan embeddings, and Bedrock answer generation;
   environment variables remain deployment overrides. RAG initially uses
@@ -151,8 +152,10 @@ when they are agreed.
   `output/pdf/SG-IA_RAG_Two_Page_Executive_Summary_V1_2.pdf`; detailed Italian
   and English-labelled audit records are stored in the run directory.
 - `RAG/compose.yaml` independently starts Qdrant, FastAPI, and Streamlit with
-  persistent named volumes. The stack passed local container health checks on
-  2026-08-10; backend unit/API tests use fakes and make no AWS calls.
+  persistent named volumes. It supports either AWS environment credentials or
+  a configurable local JSON credential file mounted read-only; no credentials
+  enter the container image. The stack passed local container health checks on
+  2026-08-13; backend unit/API tests use fakes and make no AWS calls.
 - `WIKI/` already contains a FastAPI backend, Streamlit frontend, tests, and a
   persistent Markdown LLM Wiki proof of concept powered by AWS Bedrock.
 - `WIKI/compose.yaml` independently runs that existing backend and frontend on

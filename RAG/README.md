@@ -16,8 +16,8 @@ and grounded question answering:
 - a Bedrock generation model answers only from retrieved evidence and submits
   the exact chunk IDs used as citations;
 - unsupported questions return `insufficient_evidence` without citations;
-- a Streamlit client uploads documents, monitors jobs, lists indexed sources,
-  displays retrieval diagnostics, and calls the grounded `/chat` API;
+- a focused Streamlit client provides one document-upload area and a grounded
+  chat, with citations and technical diagnostics kept in optional expanders;
 - identical file content is reused instead of indexed twice.
 
 ## Architecture
@@ -42,7 +42,11 @@ selected AWS region. This pipeline calls Bedrock directly. It does **not**
 upload documents to S3 or create any other AWS storage resource.
 
 1. Copy `RAG/.env.example` to `RAG/.env` and add temporary AWS credentials, or
-   export them in the shell before starting Compose. Never commit `.env`.
+   export them in the shell before starting Compose. As an alternative, set
+   `RAG_AWS_CREDENTIALS_HOST_FILE` to a local JSON credential file and
+   `RAG_AWS_CREDENTIALS_FILE=/run/secrets/rag_aws_credentials.json`; Compose
+   mounts that file read-only. Never commit `.env` or a populated credential
+   file.
 2. From this directory run:
 
    ```powershell
@@ -156,6 +160,8 @@ document's Qdrant points and exposes a sanitized failure through the job API.
   WIKI answer model so retrieval architecture can be compared more fairly;
 - generation uses Bedrock Converse tool use, temperature 0.1, and a validated
   evidence-ID submission rather than trusting free-form citation text;
+- generated answers use the question's language even when retrieved evidence
+  is written in another language; supported facts are translated as needed;
 - chunks default to approximately 600 tokens with 100-token overlap only when
   an oversized indivisible element must be split;
 - RAG v1.2 retrieves 24 initial semantic candidates, combines semantic and

@@ -29,6 +29,7 @@ services:
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
       AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      RAG_AWS_CREDENTIALS_FILE: ${RAG_AWS_CREDENTIALS_FILE:-}
       BEDROCK_EMBEDDING_MODEL_ID: ${BEDROCK_EMBEDDING_MODEL_ID:-}
       BEDROCK_EMBEDDING_DIMENSIONS: ${BEDROCK_EMBEDDING_DIMENSIONS:-}
       BEDROCK_GENERATION_MODEL_ID: ${BEDROCK_GENERATION_MODEL_ID:-}
@@ -49,6 +50,7 @@ services:
       - "${RAG_API_PORT:-8001}:8000"
     volumes:
       - ./config/models.json:/app/config/models.json:ro
+      - ${RAG_AWS_CREDENTIALS_HOST_FILE:-./aws_credentials.example.json}:/run/secrets/rag_aws_credentials.json:ro
       - rag_data:/app/data
       - docling_model_cache:/root/.cache
 
