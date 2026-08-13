@@ -278,7 +278,9 @@ when they are agreed.
   system's status, answer, citations, timings, model metadata, and diagnostics.
   Partial failures are isolated so one unavailable backend does not hide the
   other's answer. Its Compose service publishes the UI on port 8504 and calls
-  the two existing stacks through their host-published API ports.
+  the two existing stacks through their host-published API ports. Comparison
+  requests always use 10 final RAG evidence chunks with no UI control for this
+  fixed evaluation setting.
 
 ## Decisions still required
 

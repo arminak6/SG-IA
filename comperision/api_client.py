@@ -14,6 +14,7 @@ import requests
 DEFAULT_RAG_API_URL = "http://127.0.0.1:8001"
 DEFAULT_WIKI_API_URL = "http://127.0.0.1:8002"
 DEFAULT_CHAT_TIMEOUT_SECONDS = 660.0
+RAG_FINAL_TOP_K = 10
 
 
 class ComparisonApiError(RuntimeError):
@@ -113,7 +114,6 @@ class BackendClient:
         question: str,
         *,
         session_id: str,
-        rag_top_k: int = 10,
     ) -> BackendAnswer:
         normalized_question = question.strip()
         if not normalized_question:
@@ -124,7 +124,7 @@ class BackendClient:
             "session_id": session_id,
         }
         if self.approach == "rag":
-            body["top_k"] = rag_top_k
+            body["top_k"] = RAG_FINAL_TOP_K
 
         started = time.perf_counter()
         payload = self._request(
@@ -181,7 +181,6 @@ def ask_both(
     session_id: str,
     rag_api_url: str | None = None,
     wiki_api_url: str | None = None,
-    rag_top_k: int = 10,
     chat_timeout_seconds: float | None = None,
     clients: Mapping[str, BackendClient] | None = None,
 ) -> dict[str, BackendAnswer]:
@@ -222,7 +221,6 @@ def ask_both(
                 client,
                 normalized_question,
                 session_id,
-                rag_top_k,
             ): approach
             for approach, client in clients.items()
         }
@@ -264,14 +262,12 @@ def _safe_chat(
     client: BackendClient,
     question: str,
     session_id: str,
-    rag_top_k: int,
 ) -> BackendAnswer:
     started = time.perf_counter()
     try:
         return client.chat(
             question,
             session_id=session_id,
-            rag_top_k=rag_top_k,
         )
     except Exception as exc:  # Each backend must fail independently.
         return BackendAnswer(

@@ -229,17 +229,6 @@ with st.sidebar:
     _render_health("LLM Wiki", saved_health.get("wiki"))
     _render_health("RAG", saved_health.get("rag"))
 
-    st.divider()
-    st.caption("RAG final evidence chunks")
-    rag_top_k = st.slider(
-        "Top K",
-        min_value=8,
-        max_value=10,
-        value=10,
-        label_visibility="collapsed",
-        help="The RAG v1.2 API accepts 8–10 final reranked chunks.",
-    )
-
     if st.button("New conversation", use_container_width=True):
         st.session_state.comparison_turns = []
         st.session_state.comparison_session_id = _new_session_id()
@@ -261,7 +250,6 @@ if question:
             session_id=st.session_state.comparison_session_id,
             rag_api_url=rag_api_url,
             wiki_api_url=wiki_api_url,
-            rag_top_k=rag_top_k,
         )
 
     turn = {

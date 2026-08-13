@@ -37,6 +37,8 @@ when those URLs or the UI port need to be changed.
 
 The stacks remain independent: if one backend is unavailable, its column shows
 the error while the other backend's completed answer remains visible.
+The comparison request always asks RAG for its configured maximum of 10 final
+reranked evidence chunks; this is intentionally not exposed as a UI control.
 
 ## Local development
 

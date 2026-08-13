@@ -48,8 +48,8 @@ class CoordinatedClient:
         self.fail = fail
         self.questions: list[tuple[str, str, int]] = []
 
-    def chat(self, question: str, *, session_id: str, rag_top_k: int) -> BackendAnswer:
-        self.questions.append((question, session_id, rag_top_k))
+    def chat(self, question: str, *, session_id: str) -> BackendAnswer:
+        self.questions.append((question, session_id, 10))
         self.barrier.wait(timeout=1)
         if self.fail:
             raise RuntimeError("simulated failure")
@@ -89,7 +89,7 @@ class ApiClientTests(unittest.TestCase):
         )
         client = BackendClient("rag", "http://rag", session=session)
 
-        result = client.chat("  What is the rule?  ", session_id="session-1", rag_top_k=9)
+        result = client.chat("  What is the rule?  ", session_id="session-1")
 
         self.assertTrue(result.ok)
         self.assertEqual(result.answer, "Grounded RAG answer")
@@ -97,7 +97,7 @@ class ApiClientTests(unittest.TestCase):
         self.assertEqual(result.server_latency_ms, 120.5)
         self.assertEqual(
             session.calls[0]["json"],
-            {"question": "What is the rule?", "session_id": "session-1", "top_k": 9},
+            {"question": "What is the rule?", "session_id": "session-1", "top_k": 10},
         )
 
     def test_normalizes_wiki_response_without_rag_only_fields(self) -> None:
@@ -135,7 +135,6 @@ class ApiClientTests(unittest.TestCase):
         results = ask_both(
             "Same question",
             session_id="comparison-1",
-            rag_top_k=10,
             clients={"wiki": wiki, "rag": rag},  # type: ignore[arg-type]
         )
 
