@@ -57,6 +57,8 @@
 /test_QA/report/
 /output/
 /tmp/
+/deployment/backups/
+/deployment/corpus-manifest.json
 
 # Local evaluator configuration can reference credentials or paid models.
 /test_QA/**/config.json

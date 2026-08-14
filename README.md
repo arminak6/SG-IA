@@ -21,6 +21,7 @@ and diagnostics side by side.
 | `RAG/` | RAG v1.2 working | FastAPI ingestion, Docling extraction, Bedrock embeddings and generation, Qdrant retrieval/reranking, grounded `/chat`, Docker Compose, and an API-only Streamlit client |
 | `test_QA/` | Evaluation harness available | Shared semantic evaluation design and WIKI benchmark runner |
 | `comperision/` | Working Streamlit client | Concurrently send one question to both backends and compare answers, evidence, timings, and diagnostics side by side |
+| `deployment/` | Portable deployment tools | Unified startup, shared-corpus bootstrap and validation, plus safe state export/import |
 
 ## Repository layout
 
@@ -30,6 +31,8 @@ SG-IA/
 |-- RAG/            Retrieval-augmented generation implementation
 |-- WIKI/           LLM Wiki implementation
 |-- comperision/    Side-by-side Streamlit API client
+|-- deployment/     Portable startup, corpus, validation, and backup tools
+|-- compose.yaml    Unified six-service Docker Compose stack
 |-- test_QA/        Shared evaluation code and local benchmark fixtures
 |-- output/         Generated reports; not committed
 `-- AGENTS.md       Durable architecture and development decisions
@@ -60,6 +63,30 @@ contain company information:
 Only example configuration files may be committed. Never put real keys or
 internal documents in Git, even temporarily. A fresh clone therefore contains
 the application code but not the private corpus or generated knowledge base.
+
+## Complete application quick start
+
+The recommended deployment on another computer is the root Compose stack. It
+starts Qdrant, both APIs, all three Streamlit interfaces, and connects the
+comparison client directly to both backends:
+
+```powershell
+Copy-Item .env.example .env
+Copy-Item WIKI/aws_credentials.example.json WIKI/aws_credentials.json
+# Add temporary AWS credentials and point SGIA_AWS_CREDENTIALS_FILE to that file.
+.\deployment\start.ps1
+```
+
+Open the comparison UI at <http://localhost:8504>. RAG remains available at
+<http://localhost:8502> and LLM Wiki at <http://localhost:8503>.
+When the private corpus manifest is present, startup idempotently ingests any
+missing manifest documents into both systems and verifies exact alignment.
+
+A folder copy includes the code and bind-mounted WIKI files, but Docker named
+volumes are stored outside the folder. Use the shared-manifest bootstrap to
+rebuild both knowledge bases, or the verified export/import workflow to carry
+the existing RAG index. See [`deployment/README.md`](deployment/README.md) for
+the exact fresh-computer procedure and safety guarantees.
 
 ## LLM Wiki quick start
 
@@ -110,10 +137,10 @@ Open Streamlit at <http://localhost:8502> and FastAPI documentation at
 <http://localhost:8001/docs>. See [`RAG/README.md`](RAG/README.md) for API
 details and privacy notes.
 
-## Side-by-side comparison quick start
+## Independent side-by-side client
 
-After the independently running RAG and WIKI backends have both ingested the
-same source scope, start the comparison client:
+For component development, after independently starting RAG and WIKI with the
+same source scope, the comparison client can still be run separately:
 
 ```powershell
 cd comperision

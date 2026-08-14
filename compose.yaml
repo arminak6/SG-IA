@@ -1,0 +1,161 @@
+name: sgia
+
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.18.0
+    restart: unless-stopped
+    ports:
+      - "${RAG_QDRANT_PORT:-6337}:6333"
+      - "${RAG_QDRANT_GRPC_PORT:-6338}:6334"
+    volumes:
+      - rag_qdrant_data:/qdrant/storage
+    networks: [sgia]
+
+  rag-api:
+    image: sgia-rag-rag-api:latest
+    build:
+      context: ./RAG
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    init: true
+    depends_on:
+      qdrant:
+        condition: service_started
+    environment:
+      RAG_DATA_ROOT: /app/data
+      RAG_MODEL_CONFIG_PATH: /app/config/models.json
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-sgia_rag_chunks_titan_v2_512}
+      AWS_REGION: ${AWS_REGION:-eu-central-1}
+      AWS_DEFAULT_REGION: ${AWS_REGION:-eu-central-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      RAG_AWS_CREDENTIALS_FILE: /run/secrets/aws_credentials.json
+      BEDROCK_EMBEDDING_MODEL_ID: ${BEDROCK_EMBEDDING_MODEL_ID:-}
+      BEDROCK_EMBEDDING_DIMENSIONS: ${BEDROCK_EMBEDDING_DIMENSIONS:-}
+      BEDROCK_GENERATION_MODEL_ID: ${BEDROCK_GENERATION_MODEL_ID:-}
+      RAG_GENERATION_TEMPERATURE: ${RAG_GENERATION_TEMPERATURE:-}
+      RAG_GENERATION_MAX_OUTPUT_TOKENS: ${RAG_GENERATION_MAX_OUTPUT_TOKENS:-}
+      RAG_CONFIDENCE_ENABLED: ${RAG_CONFIDENCE_ENABLED:-true}
+      BEDROCK_CONFIDENCE_MODEL_ID: ${BEDROCK_CONFIDENCE_MODEL_ID:-}
+      RAG_CONFIDENCE_MAX_OUTPUT_TOKENS: ${RAG_CONFIDENCE_MAX_OUTPUT_TOKENS:-}
+      RAG_CONFIDENCE_MAX_EVIDENCE_CHARACTERS: ${RAG_CONFIDENCE_MAX_EVIDENCE_CHARACTERS:-}
+      RAG_CHAT_TOP_K: ${RAG_CHAT_TOP_K:-10}
+      RAG_CHAT_CANDIDATE_POOL_SIZE: ${RAG_CHAT_CANDIDATE_POOL_SIZE:-24}
+      RAG_CHAT_NEIGHBOR_WINDOW: ${RAG_CHAT_NEIGHBOR_WINDOW:-1}
+      RAG_CHAT_COVERAGE_RETRY_ENABLED: ${RAG_CHAT_COVERAGE_RETRY_ENABLED:-true}
+      RAG_CHAT_COVERAGE_MIN_RATIO: ${RAG_CHAT_COVERAGE_MIN_RATIO:-0.8}
+      RAG_CHAT_MAX_RETRIEVAL_ATTEMPTS: ${RAG_CHAT_MAX_RETRIEVAL_ATTEMPTS:-2}
+      RAG_CHAT_MAX_CONTEXT_CHARACTERS: ${RAG_CHAT_MAX_CONTEXT_CHARACTERS:-60000}
+      RAG_CHUNK_MAX_TOKENS: ${RAG_CHUNK_MAX_TOKENS:-600}
+      RAG_CHUNK_OVERLAP_TOKENS: ${RAG_CHUNK_OVERLAP_TOKENS:-100}
+      RAG_MAX_UPLOAD_BYTES: ${RAG_MAX_UPLOAD_BYTES:-104857600}
+      DOCLING_DO_OCR: ${DOCLING_DO_OCR:-}
+    ports:
+      - "${RAG_API_PORT:-8001}:8000"
+    volumes:
+      - ./RAG/config/models.json:/app/config/models.json:ro
+      - ${SGIA_AWS_CREDENTIALS_FILE:-./WIKI/aws_credentials.example.json}:/run/secrets/aws_credentials.json:ro
+      - rag_data:/app/data
+      - rag_docling_model_cache:/root/.cache
+    networks: [sgia]
+
+  rag-ui:
+    image: sgia-rag-rag-ui:latest
+    build:
+      context: ./RAG
+      dockerfile: frontend/Dockerfile
+    restart: unless-stopped
+    init: true
+    depends_on:
+      rag-api:
+        condition: service_healthy
+    environment:
+      RAG_API_URL: http://rag-api:8000
+    ports:
+      - "${RAG_UI_PORT:-8502}:8501"
+    networks: [sgia]
+
+  wiki-api:
+    image: sgia-wiki-wiki-api:latest
+    build:
+      context: ./WIKI
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    init: true
+    environment:
+      AWS_REGION: ${AWS_REGION:-eu-central-1}
+      AWS_DEFAULT_REGION: ${AWS_REGION:-eu-central-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      BEDROCK_MODEL_ID: ${BEDROCK_MODEL_ID:-}
+      BEDROCK_EMBEDDING_MODEL_ID: ${BEDROCK_EMBEDDING_MODEL_ID:-amazon.titan-embed-text-v2:0}
+      BEDROCK_EMBEDDING_DIMENSIONS: ${BEDROCK_EMBEDDING_DIMENSIONS:-512}
+      LLM_WIKI_SEMANTIC_SEARCH_ENABLED: ${LLM_WIKI_SEMANTIC_SEARCH_ENABLED:-true}
+      LLM_WIKI_ANSWER_GUARDRAIL_ENABLED: ${LLM_WIKI_ANSWER_GUARDRAIL_ENABLED:-false}
+    ports:
+      - "${WIKI_API_PORT:-8002}:8000"
+    volumes:
+      - ./WIKI/backend/raw:/app/WIKI/backend/raw:ro
+      - ./WIKI/backend/raw/manager-knowledge:/app/WIKI/backend/raw/manager-knowledge
+      - ./WIKI/backend/feedback:/app/WIKI/backend/feedback
+      - ./WIKI/backend/wiki:/app/WIKI/backend/wiki
+      - ${SGIA_AWS_CREDENTIALS_FILE:-./WIKI/aws_credentials.example.json}:/app/WIKI/aws_credentials.json:ro
+      - wiki_docling_model_cache:/root/.cache
+    networks: [sgia]
+
+  wiki-ui:
+    image: sgia-wiki-wiki-ui:latest
+    build:
+      context: ./WIKI
+      dockerfile: frontend/Dockerfile
+    restart: unless-stopped
+    init: true
+    depends_on:
+      wiki-api:
+        condition: service_healthy
+    environment:
+      LLM_WIKI_API_URL: http://wiki-api:8000
+    ports:
+      - "${WIKI_UI_PORT:-8503}:8501"
+    networks: [sgia]
+
+  comparison-ui:
+    image: sgia-comparison-comparison-ui:latest
+    build:
+      context: ./comperision
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    init: true
+    depends_on:
+      rag-api:
+        condition: service_healthy
+      wiki-api:
+        condition: service_healthy
+    environment:
+      RAG_API_URL: http://rag-api:8000
+      WIKI_API_URL: http://wiki-api:8000
+      COMPARISON_CHAT_TIMEOUT_SECONDS: ${COMPARISON_CHAT_TIMEOUT_SECONDS:-660}
+    ports:
+      - "${COMPARISON_UI_PORT:-8504}:8501"
+    networks: [sgia]
+
+networks:
+  sgia:
+    name: sgia_network
+
+volumes:
+  rag_qdrant_data:
+    name: sgia_rag_qdrant_data
+    external: true
+  rag_data:
+    name: sgia_rag_data
+    external: true
+  rag_docling_model_cache:
+    name: sgia_rag_docling_model_cache
+    external: true
+  wiki_docling_model_cache:
+    name: sgia_wiki_docling_model_cache
+    external: true

@@ -29,6 +29,9 @@ answers simultaneously for direct comparison.
 - `WIKI/frontend/` owns a Streamlit UI used to develop and test WIKI independently.
 - `comperision/` owns the Streamlit comparison interface. It calls both backend
   APIs concurrently for the same question and displays both results together.
+- `deployment/` owns portable orchestration, exact-corpus bootstrap and
+  validation, and credential-free state export/import. Root `compose.yaml`
+  starts the complete application; component Compose files remain supported.
 
 Some of these paths may not exist yet. Create them when implementing that
 component; do not treat their absence as a change in the intended architecture.
@@ -93,6 +96,19 @@ when they are agreed.
   generated Wiki knowledge, the private benchmark fixture, evaluation results,
   reports, local indexes/databases/models, caches, and editor state. Placeholder
   documentation keeps the intended data directories visible in a fresh clone.
+- Root `compose.yaml` is the unified local deployment: one command starts
+  Qdrant, both FastAPI backends, both independent Streamlit UIs, and the
+  side-by-side comparison UI on one internal network. It preserves the existing
+  RAG named-volume identities and keeps model/retrieval settings configurable
+  through a documented root `.env.example`.
+- `deployment/` provides a private SHA-256 corpus manifest, repeatable bootstrap
+  of the exact same source bytes into both approaches, readiness/corpus
+  validation, and verified RAG-volume plus WIKI-state export/import. Backups
+  exclude credentials, and import refuses unsafe archives or any non-empty or
+  conflicting destination. Direct Python and Streamlit dependencies are pinned
+  to the versions validated in the current containers. Normal root startup
+  performs the idempotent dual bootstrap and final alignment validation;
+  `-SkipManifest` is reserved for intentionally empty deployments.
 - `material/` contains the shared candidate corpus in several formats.
 - `RAG/` now has an API-first ingestion, retrieval, and grounded-answer flow. A FastAPI
   backend accepts PDF, DOCX, PPTX, Markdown, text, CSV, and JSON uploads;
@@ -173,8 +189,9 @@ when they are agreed.
   ingestion and Q&A. It remains authoritative inside `WIKI/backend/` and must
   be read before changing that component.
 - The WIKI proof of concept was reset to a clean baseline on 2026-08-06: its
-  previous fictitious test source and generated pages were removed. Alignment
-  with the shared `material/` corpus remains future work.
+  previous fictitious test source and generated pages were removed. The current
+  24-document operational subset is hash-matched to the shared `material/`
+  corpus and declared by the private deployment manifest.
 - WIKI now uses local Docling conversion for PDF, DOCX, and PPTX. All 24 files
   currently staged in `WIKI/backend/raw/` passed an extraction-only audit and
   are ingested into 61 wiki pages; none are pending.
