@@ -121,6 +121,7 @@ class ChatCorrectionResponse(ApiModel):
     action_type: str = "update_knowledge"
     changes_knowledge: bool = True
     wiki_maintenance: bool = False
+    derived_wiki_operation: str = "Not determined"
     subject: str
     previous_value: str
     corrected_value: str
@@ -131,6 +132,7 @@ class ChatCorrectionResponse(ApiModel):
     source_path: Optional[str] = None
     feedback_path: Optional[str] = None
     pages_updated: List[str] = Field(default_factory=list)
+    merge_warnings: List[str] = Field(default_factory=list)
 
 
 class ChatResponse(ApiModel):

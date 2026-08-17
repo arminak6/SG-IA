@@ -235,6 +235,7 @@ class ApiTests(unittest.TestCase):
                         "action_type": "fix_answer",
                         "changes_knowledge": False,
                         "wiki_maintenance": True,
+                        "derived_wiki_operation": "Repairs an existing evidence page",
                         "subject": "Holiday start",
                         "previous_value": "28 December",
                         "corrected_value": "27 December",
@@ -245,6 +246,7 @@ class ApiTests(unittest.TestCase):
                         "source_path": None,
                         "feedback_path": None,
                         "pages_updated": [],
+                        "merge_warnings": [],
                     },
                 }
 
@@ -265,6 +267,10 @@ class ApiTests(unittest.TestCase):
             "The holiday starts on 27 December.",
         )
         self.assertFalse(response.json()["manager_action"]["changes_knowledge"])
+        self.assertEqual(
+            response.json()["manager_action"]["derived_wiki_operation"],
+            "Repairs an existing evidence page",
+        )
         self.assertEqual(self.service.questions, [])
 
     def test_list_wiki_pages_returns_metadata(self) -> None:

@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import re
+import unicodedata
 from dataclasses import dataclass
 from typing import Any, Mapping
 
@@ -232,6 +235,23 @@ SUBMIT_LINK_REPAIRS_TOOL = _tool(
         "additionalProperties": False,
     },
 )
+REVIEW_WIKI_UPDATE_TOOL = _tool(
+    "review_wiki_update",
+    "Verify that staged Wiki rewrites contain only claims supported by current raw sources.",
+    {
+        "type": "object",
+        "properties": {
+            "valid": {"type": "boolean"},
+            "unsupported_claims": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            "explanation": {"type": "string"},
+        },
+        "required": ["valid", "unsupported_claims", "explanation"],
+        "additionalProperties": False,
+    },
+)
 
 
 BASE_SAFETY_PROMPT = """
@@ -289,6 +309,17 @@ finish with a short summary.
 """.strip()
 
 
+REVIEW_WIKI_UPDATE_PROMPT = """Review staged Wiki pages against their complete current raw sources.
+
+Every material claim in staged_pages must be entailed by at least one listed raw source for that page.
+Normal grammatical paraphrase and summarization are allowed. A new characterization, purpose, date,
+quantity, actor, scope, recurrence, consequence, or certainty is unsupported even if it appeared in an
+older Wiki version. For example, an email must not become a reminder email unless a raw source says it is
+a reminder. Existing Wiki prose is not evidence. Return valid=true only when every material claim is
+supported. Otherwise list concise unsupported claims. Call review_wiki_update exactly once.
+"""
+
+
 ANSWER_PROMPT = """
 Answer only from the wiki. Search and read relevant complete pages before
 answering. Do not treat search excerpts as enough evidence. Every factual answer
@@ -330,6 +361,7 @@ class WikiAgent:
         self.bedrock = bedrock
         self.max_steps = max_steps
         self.searcher = searcher
+        self._manager_update_review_cache: dict[str, tuple[bool, tuple[str, ...]]] = {}
 
     def _system_prompt(self, operation_prompt: str) -> str:
         schema = self.repository.read_schema().strip()
@@ -390,6 +422,7 @@ class WikiAgent:
         source_path: str,
         *,
         writable_pages: tuple[str, ...] = (),
+        exact_approved_text: str | None = None,
     ) -> IngestionResult:
         """Integrate one approved update without allowing new Wiki pages."""
 
@@ -423,6 +456,7 @@ class WikiAgent:
             instruction=instruction,
             operation_prompt=UPDATE_EXISTING_PROMPT,
             writable_existing_pages=frozenset(allowed_pages),
+            exact_approved_text=exact_approved_text,
         )
 
     def _integrate_source(
@@ -432,6 +466,7 @@ class WikiAgent:
         instruction: str,
         operation_prompt: str,
         writable_existing_pages: frozenset[str] | None,
+        exact_approved_text: str | None = None,
     ) -> IngestionResult:
         """Integrate one raw source under creation or existing-page-only rules."""
 
@@ -561,6 +596,8 @@ class WikiAgent:
                                 source_read=source_read,
                                 staged=staged,
                                 writable_existing_pages=writable_existing_pages,
+                                usage=usage,
+                                exact_approved_text=exact_approved_text,
                             )
                         except AgentValidationError as exc:
                             repair_instruction = (
@@ -604,6 +641,8 @@ class WikiAgent:
                     source_read=source_read,
                     staged=staged,
                     writable_existing_pages=writable_existing_pages,
+                    usage=usage,
+                    exact_approved_text=exact_approved_text,
                 )
             except AgentValidationError as exc:
                 logger.warning(
@@ -631,6 +670,8 @@ class WikiAgent:
             source_read=source_read,
             staged=staged,
             writable_existing_pages=writable_existing_pages,
+            usage=usage,
+            exact_approved_text=exact_approved_text,
         )
         pages_written = tuple(self.repository.commit_ingestion(source_path, staged))
         index_message = ""
@@ -671,6 +712,8 @@ class WikiAgent:
         source_read: bool,
         staged: Mapping[str, str],
         writable_existing_pages: frozenset[str] | None = None,
+        usage: dict[str, int] | None = None,
+        exact_approved_text: str | None = None,
     ) -> None:
         if not source_read:
             raise AgentValidationError("Ingestion ended without reading the raw source.")
@@ -684,6 +727,8 @@ class WikiAgent:
                     + ", ".join(disallowed)
                 )
             self._validate_manager_update_fidelity(source_path, staged)
+            self._validate_exact_manager_wording(exact_approved_text, staged)
+            self._validate_manager_update_semantics(source_path, staged, usage=usage)
         elif not any(page_path.casefold().startswith("sources/") for page_path in staged):
             raise AgentValidationError(
                 "Ingestion ended without staging the mandatory source-summary page."
@@ -770,6 +815,115 @@ class WikiAgent:
                     f"in {page_path}: {', '.join(unsupported)}"
                 )
 
+    def _validate_manager_update_semantics(
+        self,
+        source_path: str,
+        staged: Mapping[str, str],
+        *,
+        usage: dict[str, int] | None,
+    ) -> None:
+        """Use an independent entailment review before committing manager-derived pages."""
+
+        if not source_path.casefold().startswith("raw/manager-knowledge/"):
+            return
+        pages_payload: list[dict[str, object]] = []
+        for page_path, content in sorted(staged.items(), key=lambda item: item[0].casefold()):
+            sources: list[dict[str, str]] = []
+            for provenance in self.repository.page_source_paths(page_path, content=content):
+                sources.append(
+                    {
+                        "source_path": provenance,
+                        "content": self.repository.read_raw(provenance),
+                    }
+                )
+            pages_payload.append(
+                {
+                    "page_path": page_path,
+                    "staged_content": content,
+                    "raw_sources": sources,
+                }
+            )
+        serialized = json.dumps(pages_payload, ensure_ascii=False, sort_keys=True)
+        cache_key = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+        cached = self._manager_update_review_cache.get(cache_key)
+        if cached is None:
+            turn = self.bedrock.converse(
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "text": (
+                                    "<wiki_update_data>\n"
+                                    f"{serialized}\n"
+                                    "</wiki_update_data>"
+                                )
+                            }
+                        ],
+                    }
+                ],
+                system_prompt=self._system_prompt(REVIEW_WIKI_UPDATE_PROMPT),
+                tools=[REVIEW_WIKI_UPDATE_TOOL],
+                max_tokens=1_000,
+                temperature=0,
+            )
+            if usage is not None:
+                self._add_usage(usage, turn)
+            reviews = [
+                tool_use.get("input")
+                for tool_use in self._tool_uses(turn)
+                if tool_use.get("name") == "review_wiki_update"
+                and isinstance(tool_use.get("input"), Mapping)
+            ]
+            if len(reviews) != 1:
+                raise AgentValidationError(
+                    "Semantic manager update review did not return one structured result."
+                )
+            review = reviews[0]
+            valid = review.get("valid")
+            unsupported = review.get("unsupported_claims")
+            if not isinstance(valid, bool) or not isinstance(unsupported, list):
+                raise AgentValidationError("Semantic manager update review is invalid.")
+            issues = tuple(
+                re.sub(r"\s+", " ", str(value)).strip()[:300]
+                for value in unsupported
+                if str(value).strip()
+            )
+            cached = (valid, issues)
+            self._manager_update_review_cache[cache_key] = cached
+        valid, issues = cached
+        if not valid:
+            detail = "; ".join(issues) or "unsupported derived claims"
+            raise AgentValidationError(
+                "Semantic manager update review found unsupported claim(s): " + detail
+            )
+
+    @classmethod
+    def _validate_exact_manager_wording(
+        cls,
+        exact_approved_text: str | None,
+        staged: Mapping[str, str],
+    ) -> None:
+        """Preserve an explicitly requested exact statement in a canonical page."""
+
+        if not exact_approved_text:
+            return
+        expected = cls._normalized_prose(exact_approved_text)
+        staged_prose = "\n".join(cls._wiki_claim_body(value) for value in staged.values())
+        if expected not in cls._normalized_prose(staged_prose):
+            raise AgentValidationError(
+                "The manager explicitly requested exact wording, but no staged canonical "
+                "Wiki page preserves the complete approved statement. Include it verbatim "
+                "as a knowledge paragraph before committing."
+            )
+
+    @staticmethod
+    def _normalized_prose(value: str) -> str:
+        value = unicodedata.normalize("NFKC", value).casefold()
+        value = re.sub(r"[*_`]", "", value)
+        value = re.sub(r"[\u2010-\u2015]", "-", value)
+        return re.sub(r"\s+", " ", value).strip()
+
     @staticmethod
     def _numeric_markers(value: str) -> set[str]:
         return {
@@ -834,6 +988,44 @@ class WikiAgent:
                 "The answer omitted the evidence's confirmation condition for the requested value."
             )
 
+        qualifier_groups = (
+            (
+                "confirmation timing",
+                ("before", "beforehand", "in advance", "prior", "earlier", "prima", "anticipo"),
+            ),
+            (
+                "confirmation time unit",
+                ("day", "week", "month", "giorn", "settiman", "mes"),
+            ),
+            (
+                "confirmation communication method",
+                (
+                    "email",
+                    "e-mail",
+                    "mail",
+                    "message",
+                    "notify",
+                    "notific",
+                    "letter",
+                    "call",
+                    "telefon",
+                    "messagg",
+                ),
+            ),
+        )
+        if any(term in evidence for term in confirmation_terms):
+            missing_groups = [
+                label
+                for label, terms in qualifier_groups
+                if any(term in evidence for term in terms)
+                and not any(term in answer_folded for term in terms)
+            ]
+            if missing_groups:
+                raise AgentValidationError(
+                    "The answer omitted material confirmation qualifier(s): "
+                    + ", ".join(missing_groups)
+                )
+
     def answer(self, question: str) -> AnswerResult:
         question = question.strip()
         if not question:
@@ -875,7 +1067,7 @@ class WikiAgent:
         search_modes: list[str] = []
         retrieval_diagnostics: list[dict[str, object]] = []
         usage: dict[str, int] = {}
-        requested_submit_repair = False
+        consecutive_no_tool_turns = 0
 
         def validate_submission(inputs: Mapping[str, Any]) -> AnswerResult:
             status = inputs.get("status")
@@ -964,7 +1156,7 @@ class WikiAgent:
             messages.append(turn.message)
             tool_uses = self._tool_uses(turn)
             if not tool_uses:
-                if requested_submit_repair:
+                if consecutive_no_tool_turns >= 1:
                     raise AgentValidationError("Model did not submit a structured grounded answer.")
                 messages.append(
                     {
@@ -979,9 +1171,10 @@ class WikiAgent:
                         ],
                     }
                 )
-                requested_submit_repair = True
+                consecutive_no_tool_turns += 1
                 continue
 
+            consecutive_no_tool_turns = 0
             results: list[dict[str, Any]] = []
             mixed_submission = len(tool_uses) > 1 and any(
                 tool_use.get("name") == "submit_answer" for tool_use in tool_uses

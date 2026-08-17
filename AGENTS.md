@@ -256,11 +256,17 @@ when they are agreed.
   year" are confirmation-ready without an additional calendar year. A
   pre-commit fidelity check rejects derived rewrites that drop approved numeric
   or percentage details or confirmation conditions, or introduce numeric/date
-  claims absent from all current page sources. A bounded repair turn runs
-  before fail-closed rollback, and grounded answers retain material percentage
-  and confirmation qualifiers. The Sinergia mid-summer manager source and its
-  two Wiki pages were repaired through the confirmed API flow on 2026-08-17;
-  the unsupported calculated 6 July date was removed.
+  claims absent from all current page sources. Independent structured reviews
+  reject unsupported inference both in the proposed merge and in staged Wiki
+  prose. Explicit exact/verbatim requests must be preserved in a canonical
+  page. A bounded repair turn runs before fail-closed rollback, and grounded
+  answers retain material percentage and confirmation qualifiers, including
+  stated timing and communication method. Invalid
+  structured-answer attempts followed by free text can receive one fresh
+  bounded submission reminder. The Sinergia mid-summer manager source and its
+  two Wiki pages were repaired through the confirmed API flow on 2026-08-17 and
+  now preserve the approved 100%-certainty statement and one-week email
+  confirmation condition.
   Approved source knowledge changes must also enter RAG before comparison.
   Ambiguous or incomplete action details require clarification, and confirmation
   remains mandatory before any write. Insufficient-knowledge confidence is

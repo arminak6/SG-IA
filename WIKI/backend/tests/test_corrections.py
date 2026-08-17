@@ -127,8 +127,8 @@ def mid_summer_merged_turn() -> ConverseTurn:
                             "previous_value": "",
                             "new_value": (
                                 "The annual Sinergia mid-summer meeting is expected on "
-                                "13 July with 99% certainty. Sinergia will email everyone "
-                                "one week beforehand to confirm the date."
+                                "13 July with 99% certainty. Sinergia will send a reminder "
+                                "email one week beforehand to confirm the date will be observed."
                             ),
                             "scope": "",
                             "effective_period": "",
@@ -146,6 +146,38 @@ def mid_summer_merged_turn() -> ConverseTurn:
         },
         stop_reason="tool_use",
         usage={"inputTokens": 30, "outputTokens": 20},
+        metrics={},
+    )
+
+
+def merge_review_turn() -> ConverseTurn:
+    return ConverseTurn(
+        message={
+            "role": "assistant",
+            "content": [
+                {
+                    "toolUse": {
+                        "toolUseId": "merge-review",
+                        "name": "review_manager_merge",
+                        "input": {
+                            "valid": False,
+                            "corrected_value": (
+                                "The annual Sinergia mid-summer meeting is expected on "
+                                "13 July with 99% certainty. Sinergia will email everyone "
+                                "one week beforehand to confirm the date."
+                            ),
+                            "unsupported_additions": [
+                                "The email was characterized as a reminder.",
+                                "The date was characterized as being observed.",
+                            ],
+                            "explanation": "Those characterizations are not stated in the inputs.",
+                        },
+                    }
+                }
+            ],
+        },
+        stop_reason="tool_use",
+        usage={"inputTokens": 25, "outputTokens": 15},
         metrics={},
     )
 
@@ -265,12 +297,20 @@ class CorrectionWorkflowTests(unittest.TestCase):
                     "source_paths": ["raw/manager-knowledge/sinergia-meeting.md"],
                 },
             ),
+            maintained_knowledge=(
+                {
+                    "source_path": "raw/manager-knowledge/sinergia-meeting.md",
+                    "current_value": (
+                        "The meeting is held annually on 13 July. Sinergia will email "
+                        "everyone one week beforehand to confirm the date."
+                    ),
+                },
+            ),
         )
 
-        result = ManagerActionInterpreter(ScriptedBedrock(mid_summer_merged_turn())).interpret(
-            context,
-            f"/update {manager_text}",
-        )
+        result = ManagerActionInterpreter(
+            ScriptedBedrock(mid_summer_merged_turn(), merge_review_turn())
+        ).interpret(context, f"/update {manager_text}")
 
         self.assertIsNotNone(result)
         self.assertEqual(result.action_type, "update_knowledge")
@@ -282,6 +322,9 @@ class CorrectionWorkflowTests(unittest.TestCase):
         self.assertIn("99% certainty", result.new_value)
         self.assertIn("confirm the date", result.new_value)
         self.assertNotIn("6 July", result.new_value)
+        self.assertNotIn("reminder", result.new_value)
+        self.assertNotIn("observed", result.new_value)
+        self.assertEqual(len(result.merge_warnings), 2)
         self.assertEqual(result.manager_input, manager_text)
         self.assertEqual(result.effective_period, "annual")
         self.assertFalse(result.needs_clarification)

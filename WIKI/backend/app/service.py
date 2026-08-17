@@ -693,10 +693,10 @@ class WikiService:
                 skipped.append({"source_path": source_path, "reason": "Already ingested."})
             else:
                 try:
-                    result = self.agent.update_existing_knowledge(
-                        source_path,
-                        writable_pages=writable_pages,
-                    )
+                    update_options: dict[str, object] = {"writable_pages": writable_pages}
+                    if proposal.requires_exact_wording:
+                        update_options["exact_approved_text"] = proposal.new_value
+                    result = self.agent.update_existing_knowledge(source_path, **update_options)
                     processed_item = result.to_dict()
                     try:
                         self.repository.append_log(
@@ -1113,13 +1113,18 @@ class WikiService:
                 "",
                 f"- Tipo di azione: {action_label}",
                 f"- Modifica le fonti di conoscenza: {'Sì' if proposal.changes_knowledge else 'No'}",
-                f"- Manutenzione della Wiki derivata: {'Sì' if proposal.wiki_maintenance else 'No'}",
+                f"- Gestione della Wiki derivata: {proposal.derived_wiki_operation}",
                 f"- Argomento: {proposal.subject or 'Da specificare'}",
                 f"- Valore precedente: {proposal.previous_value or 'Non isolato'}",
                 f"- Conoscenza completa proposta: {proposal.new_value or 'Da specificare'}",
                 f"- Ambito: {proposal.scope or 'Da specificare'}",
                 f"- Periodo di validità: {effective}",
             ]
+            if proposal.merge_warnings:
+                lines.append(
+                    "- Revisione fusione: rimosse inferenze non supportate: "
+                    + "; ".join(proposal.merge_warnings)
+                )
             if proposal.ready_for_confirmation:
                 lines.extend(
                     [
@@ -1141,13 +1146,18 @@ class WikiService:
             "",
             f"- Action type: {action_label}",
             f"- Changes source knowledge: {'Yes' if proposal.changes_knowledge else 'No'}",
-            f"- Maintains derived Wiki pages: {'Yes' if proposal.wiki_maintenance else 'No'}",
+            f"- Derived Wiki handling: {proposal.derived_wiki_operation}",
             f"- Subject: {proposal.subject or 'Not specified'}",
             f"- Previous value: {proposal.previous_value or 'Not isolated'}",
             f"- Proposed complete knowledge: {proposal.new_value or 'Not specified'}",
             f"- Scope: {proposal.scope or 'Not specified'}",
             f"- Effective period: {effective}",
         ]
+        if proposal.merge_warnings:
+            lines.append(
+                "- Merge review: removed unsupported inferred wording: "
+                + "; ".join(proposal.merge_warnings)
+            )
         if proposal.ready_for_confirmation:
             lines.extend(
                 [

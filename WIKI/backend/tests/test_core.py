@@ -81,6 +81,26 @@ def assistant_turn(*content: dict[str, object]) -> ConverseTurn:
     )
 
 
+def wiki_update_review_turn(
+    *,
+    valid: bool,
+    unsupported_claims: tuple[str, ...] = (),
+) -> ConverseTurn:
+    return assistant_turn(
+        {
+            "toolUse": {
+                "toolUseId": "wiki-update-review",
+                "name": "review_wiki_update",
+                "input": {
+                    "valid": valid,
+                    "unsupported_claims": list(unsupported_claims),
+                    "explanation": "All claims supported." if valid else "Unsupported wording.",
+                },
+            }
+        }
+    )
+
+
 def wiki_page(
     *,
     title: str = "Test Article",
@@ -797,6 +817,37 @@ everyone one week beforehand to confirm the date.
                     writable_existing_pages=frozenset({"entities/meeting.md"}),
                 )
 
+    def test_exact_manager_wording_must_appear_in_a_canonical_page(self) -> None:
+        approved = (
+            "The annual meeting is held on 13 July with 100% certainty. "
+            "The organizer will email everyone one week beforehand to confirm the date."
+        )
+        paraphrased = wiki_page(
+            title="Meeting",
+            page_type="entity",
+            sources=("raw/manager-knowledge/meeting.md",),
+            body=(
+                "The annual meeting is scheduled for 13 July with certainty that it will "
+                "be observed. The organizer will email everyone one week beforehand."
+            ),
+        )
+        exact = wiki_page(
+            title="Meeting",
+            page_type="entity",
+            sources=("raw/manager-knowledge/meeting.md",),
+            body=approved,
+        )
+
+        with self.assertRaisesRegex(AgentValidationError, "exact wording"):
+            WikiAgent._validate_exact_manager_wording(
+                approved,
+                {"entities/meeting.md": paraphrased},
+            )
+        WikiAgent._validate_exact_manager_wording(
+            approved,
+            {"entities/meeting.md": exact},
+        )
+
     def test_manager_update_repairs_unsupported_calculated_date_before_commit(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             backend_root = Path(temp_dir) / "backend"
@@ -870,6 +921,7 @@ everyone one week beforehand to confirm the date.
                         }
                     ),
                     assistant_turn({"text": "Repaired update complete."}),
+                    wiki_update_review_turn(valid=True),
                 ]
             )
             agent = WikiAgent(repository, scripted, max_steps=8)
@@ -894,6 +946,98 @@ everyone one week beforehand to confirm the date.
             any("unsupported numeric/date detail" in text for text in repair_prompts)
         )
 
+    def test_manager_update_semantic_review_repairs_unsupported_characterization(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            backend_root = Path(temp_dir) / "backend"
+            manager_root = backend_root / "raw" / "manager-knowledge"
+            manager_root.mkdir(parents=True)
+            source_path = "raw/manager-knowledge/meeting.md"
+            (manager_root / "meeting.md").write_text(
+                """# Manager Knowledge: Meeting
+
+## Current approved knowledge
+
+The company will email everyone one week beforehand to confirm the date.
+""",
+                encoding="utf-8",
+            )
+            repository = WikiRepository(backend_root)
+            original = wiki_page(
+                title="Meeting",
+                page_type="entity",
+                sources=(source_path,),
+                body="The company will email everyone to confirm the date.",
+            )
+            repository.write_wiki_pages({"entities/meeting.md": original})
+            inferred = wiki_page(
+                title="Meeting",
+                page_type="entity",
+                sources=(source_path,),
+                body=(
+                    "The company will send a reminder email one week beforehand "
+                    "to confirm the date."
+                ),
+            )
+            repaired = wiki_page(
+                title="Meeting",
+                page_type="entity",
+                sources=(source_path,),
+                body="The company will email everyone one week beforehand to confirm the date.",
+            )
+            scripted = ScriptedBedrock(
+                [
+                    assistant_turn(
+                        {
+                            "toolUse": {
+                                "toolUseId": "read-semantic",
+                                "name": "read_wiki_page",
+                                "input": {"path": "entities/meeting.md"},
+                            }
+                        }
+                    ),
+                    assistant_turn(
+                        {
+                            "toolUse": {
+                                "toolUseId": "write-inferred",
+                                "name": "write_wiki_page",
+                                "input": {"path": "entities/meeting.md", "content": inferred},
+                            }
+                        }
+                    ),
+                    assistant_turn({"text": "Update complete."}),
+                    wiki_update_review_turn(
+                        valid=False,
+                        unsupported_claims=("The email is characterized as a reminder.",),
+                    ),
+                    assistant_turn(
+                        {
+                            "toolUse": {
+                                "toolUseId": "write-semantic-repair",
+                                "name": "write_wiki_page",
+                                "input": {"path": "entities/meeting.md", "content": repaired},
+                            }
+                        }
+                    ),
+                    assistant_turn({"text": "Semantic repair complete."}),
+                    wiki_update_review_turn(valid=True),
+                ]
+            )
+            agent = WikiAgent(repository, scripted, max_steps=10)
+
+            result = agent.update_existing_knowledge(
+                source_path,
+                writable_pages=("entities/meeting.md",),
+            )
+            final_page = repository.read_wiki_page("entities/meeting.md")
+
+        self.assertEqual(result.pages_written, ("entities/meeting.md",))
+        self.assertNotIn("reminder", final_page)
+        self.assertIn("confirm the date", final_page)
+        self.assertIn(
+            "Semantic manager update review found unsupported claim",
+            str(scripted.calls[4]["messages"]),
+        )
+
     def test_answer_validation_preserves_percentage_and_confirmation_qualifiers(self) -> None:
         page = wiki_page(
             title="Meeting",
@@ -913,6 +1057,14 @@ everyone one week beforehand to confirm the date.
         with self.assertRaisesRegex(AgentValidationError, "confirmation condition"):
             WikiAgent._validate_answer_qualifiers(
                 "The meeting is expected on 13 July with 99% certainty.",
+                [page],
+            )
+        with self.assertRaisesRegex(AgentValidationError, "confirmation qualifier"):
+            WikiAgent._validate_answer_qualifiers(
+                (
+                    "The meeting is expected on 13 July with 99% certainty; "
+                    "the date will be confirmed."
+                ),
                 [page],
             )
 
@@ -1195,6 +1347,80 @@ everyone one week beforehand to confirm the date.
             "must be the only tool call",
             str(scripted.calls[1]["messages"]),
         )
+
+    def test_answer_recovers_after_invalid_submission_then_free_text(self) -> None:
+        page = wiki_page(
+            body=(
+                "The meeting is expected on 13 July with 100% certainty. "
+                "The company will email everyone one week beforehand to confirm the date."
+            )
+        )
+        citations = [
+            {
+                "wiki_path": "sources/article.md",
+                "source_paths": ["raw/article.txt"],
+            }
+        ]
+        turns = [
+            assistant_turn(
+                {
+                    "toolUse": {
+                        "toolUseId": "read-qualified",
+                        "name": "read_wiki_page",
+                        "input": {"path": "sources/article.md"},
+                    }
+                }
+            ),
+            assistant_turn(
+                {
+                    "toolUse": {
+                        "toolUseId": "invalid-qualified-answer",
+                        "name": "submit_answer",
+                        "input": {
+                            "status": "answered",
+                            "answer": "The meeting is scheduled for 13 July.",
+                            "citations": citations,
+                        },
+                    }
+                }
+            ),
+            assistant_turn({"text": "It is on 13 July."}),
+            assistant_turn(
+                {
+                    "toolUse": {
+                        "toolUseId": "repaired-qualified-answer",
+                        "name": "submit_answer",
+                        "input": {
+                            "status": "answered",
+                            "answer": (
+                                "The meeting is expected on 13 July with 100% certainty; "
+                                "the company will confirm the date by email one week beforehand."
+                            ),
+                            "citations": citations,
+                        },
+                    }
+                }
+            ),
+        ]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            backend_root = Path(temp_dir) / "backend"
+            raw_root = backend_root / "raw"
+            raw_root.mkdir(parents=True)
+            (raw_root / "article.txt").write_text(
+                "13 July, 100% certainty, confirmation one week beforehand.",
+                encoding="utf-8",
+            )
+            repository = WikiRepository(backend_root)
+            repository.write_wiki_pages({"sources/article.md": page})
+            scripted = ScriptedBedrock(turns)
+
+            result = WikiAgent(repository, scripted, max_steps=6).answer(
+                "When is the meeting?"
+            )
+
+        self.assertIn("100% certainty", result.answer)
+        self.assertIn("confirm the date", result.answer)
+        self.assertIn("Do not answer as text", str(scripted.calls[3]["messages"]))
 
     def test_answer_citation_must_include_all_page_provenance(self) -> None:
         page = wiki_page(sources=("raw/article.txt", "raw/second.txt"))

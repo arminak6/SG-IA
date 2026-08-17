@@ -56,6 +56,7 @@ class ManagerActionProposal:
     source_path: str | None = None
     feedback_path: str | None = None
     pages_updated: tuple[str, ...] = ()
+    merge_warnings: tuple[str, ...] = ()
 
     @property
     def changes_knowledge(self) -> bool:
@@ -64,6 +65,32 @@ class ManagerActionProposal:
     @property
     def wiki_maintenance(self) -> bool:
         return self.action_type == "fix_answer"
+
+    @property
+    def derived_wiki_operation(self) -> str:
+        return {
+            "fix_answer": "Repairs an existing evidence page",
+            "update_knowledge": "Rewrites existing cited pages",
+            "add_knowledge": "Creates or updates derived pages",
+        }.get(self.action_type, "Not determined")
+
+    @property
+    def requires_exact_wording(self) -> bool:
+        """Whether the manager explicitly requested verbatim preservation."""
+
+        normalized = re.sub(r"\s+", " ", self.manager_input.casefold())
+        return any(
+            marker in normalized
+            for marker in (
+                "exact wording",
+                "exactly:",
+                "verbatim",
+                "word for word",
+                "esattamente:",
+                "testo esatto",
+                "parola per parola",
+            )
+        )
 
     @property
     def ready_for_confirmation(self) -> bool:
@@ -83,6 +110,7 @@ class ManagerActionProposal:
             "action_type": self.action_type,
             "changes_knowledge": self.changes_knowledge,
             "wiki_maintenance": self.wiki_maintenance,
+            "derived_wiki_operation": self.derived_wiki_operation,
             "subject": self.subject,
             "previous_value": self.previous_value,
             "corrected_value": self.new_value,
@@ -93,6 +121,7 @@ class ManagerActionProposal:
             "source_path": self.source_path,
             "feedback_path": self.feedback_path,
             "pages_updated": list(self.pages_updated),
+            "merge_warnings": list(self.merge_warnings),
         }
 
 
@@ -159,6 +188,51 @@ MANAGER_ACTION_TOOL = {
         },
     }
 }
+
+
+MANAGER_MERGE_REVIEW_TOOL = {
+    "toolSpec": {
+        "name": "review_manager_merge",
+        "description": "Verify that merged manager knowledge contains no unsupported additions.",
+        "inputSchema": {
+            "json": {
+                "type": "object",
+                "properties": {
+                    "valid": {"type": "boolean"},
+                    "corrected_value": {"type": "string"},
+                    "unsupported_additions": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "explanation": {"type": "string"},
+                },
+                "required": [
+                    "valid",
+                    "corrected_value",
+                    "unsupported_additions",
+                    "explanation",
+                ],
+                "additionalProperties": False,
+            }
+        },
+    }
+}
+
+
+MANAGER_MERGE_REVIEW_PROMPT = """You verify a proposed trusted-manager knowledge merge.
+
+The maintained_knowledge snapshot is the complete prior approved source. The manager_input contains the
+new instruction. Every material claim in proposed_knowledge must be entailed by one of those inputs.
+Normal grammatical paraphrase is allowed, but a new characterization, purpose, date, quantity, actor,
+scope, recurrence, consequence, or certainty is unsupported unless an input states or necessarily entails
+it. For example, an "email" must not become a "reminder email" unless an input calls it a reminder.
+
+The manager_input may replace, qualify, or append to the prior snapshot. Preserve prior facts that are not
+contradicted, and apply the manager's explicit change. If the proposal is fully supported, return valid=true
+and the proposal unchanged in corrected_value. Otherwise return valid=false, list concise unsupported
+additions, and provide a complete corrected_value with only those additions removed. Never add new facts.
+Call review_manager_merge exactly once.
+"""
 
 
 MANAGER_ACTION_PROMPT = """You structure an explicitly requested action from a trusted manager in a Wiki proof of concept.
@@ -341,7 +415,8 @@ class ManagerActionInterpreter:
                         action_details=action_details,
                         draft=draft,
                     )
-                    return self._complete_explicit_proposal(proposal, context=context)
+                    proposal = self._complete_explicit_proposal(proposal, context=context)
+                    return self._review_knowledge_merge(proposal, context=context)
                 except ManagerActionError:
                     if attempt == 1:
                         break
@@ -403,6 +478,90 @@ class ManagerActionInterpreter:
                 clarification_question="",
             )
         return proposal
+
+    def _review_knowledge_merge(
+        self,
+        proposal: ManagerActionProposal,
+        *,
+        context: ManagerActionContext,
+    ) -> ManagerActionProposal:
+        """Remove unsupported model-added claims from an existing-source update."""
+
+        if proposal.action_type != "update_knowledge" or not context.maintained_knowledge:
+            return proposal
+        payload = {
+            "maintained_knowledge": [dict(item) for item in context.maintained_knowledge],
+            "manager_input": proposal.manager_input,
+            "proposed_knowledge": proposal.new_value,
+        }
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "text": (
+                            "<manager_merge_data>\n"
+                            f"{json.dumps(payload, ensure_ascii=False)}\n"
+                            "</manager_merge_data>"
+                        )
+                    }
+                ],
+            }
+        ]
+        turn = self.bedrock.converse(
+            messages=messages,
+            system_prompt=MANAGER_MERGE_REVIEW_PROMPT,
+            tools=[MANAGER_MERGE_REVIEW_TOOL],
+            max_tokens=1_000,
+            temperature=0,
+        )
+        usage = dict(proposal.usage)
+        self._add_usage(usage, turn)
+        reviews = self._named_submissions(turn, "review_manager_merge")
+        if len(reviews) != 1:
+            return replace(
+                proposal,
+                needs_clarification=True,
+                clarification_question=(
+                    "The complete merged value could not be verified. Please review or restate it."
+                ),
+                usage=usage,
+            )
+
+        review = reviews[0]
+        valid = review.get("valid")
+        corrected = review.get("corrected_value")
+        additions = review.get("unsupported_additions")
+        if not isinstance(valid, bool) or not isinstance(corrected, str) or not isinstance(
+            additions, list
+        ):
+            raise ManagerActionError("Manager merge review is invalid.")
+        warnings = tuple(
+            re.sub(r"\s+", " ", str(value)).strip()[:300]
+            for value in additions
+            if str(value).strip()
+        )
+        if valid:
+            return replace(proposal, usage=usage, merge_warnings=())
+        if not corrected.strip():
+            return replace(
+                proposal,
+                needs_clarification=True,
+                clarification_question=(
+                    "The proposed merge contained unsupported additions and could not be repaired. "
+                    "Please provide the complete intended value."
+                ),
+                usage=usage,
+                merge_warnings=warnings,
+            )
+        return replace(
+            proposal,
+            new_value=re.sub(r"\s+", " ", corrected).strip()[:2_000],
+            needs_clarification=False,
+            clarification_question="",
+            usage=usage,
+            merge_warnings=warnings,
+        )
 
     @classmethod
     def _complete_explicit_proposal(
@@ -538,10 +697,14 @@ class ManagerActionInterpreter:
 
     @staticmethod
     def _submissions(turn: ConverseTurn) -> list[Mapping[str, Any]]:
+        return ManagerActionInterpreter._named_submissions(turn, "submit_manager_action")
+
+    @staticmethod
+    def _named_submissions(turn: ConverseTurn, tool_name: str) -> list[Mapping[str, Any]]:
         values: list[Mapping[str, Any]] = []
         for block in turn.message.get("content", []):
             tool_use = block.get("toolUse") if isinstance(block, Mapping) else None
-            if not isinstance(tool_use, Mapping) or tool_use.get("name") != "submit_manager_action":
+            if not isinstance(tool_use, Mapping) or tool_use.get("name") != tool_name:
                 continue
             inputs = tool_use.get("input")
             if isinstance(inputs, Mapping):

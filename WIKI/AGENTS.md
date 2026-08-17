@@ -267,15 +267,21 @@ logic.
   persist one complete merged current value. Incremental wording no longer
   replaces the entire stable manager source.
 - Clarification is limited to genuinely missing or ambiguous factual details.
-  A pre-commit fidelity check rejects derived Wiki rewrites that lose approved
+  An independent merge review removes unsupported inferred wording before the
+  preview. Pre-commit deterministic and semantic checks reject derived Wiki
+  rewrites that lose approved
   numeric/percentage details or confirmation conditions, or introduce numeric
-  dates absent from all current page sources. The agent receives a bounded
-  repair turn before fail-closed rollback. Grounded answers must retain
-  percentage and confirmation qualifiers attached to the requested value.
+  dates or other material claims absent from all current page sources. An
+  explicit exact/verbatim request must appear intact in a canonical page. The
+  agent receives a bounded repair turn before fail-closed rollback. Grounded
+  answers must retain percentage and confirmation qualifiers, including stated
+  timing and communication method, attached to the
+  requested value, and an invalid structured submission can receive one fresh
+  bounded submit reminder.
 - The affected Sinergia mid-summer source and its two existing Wiki pages were
-  repaired through the confirmed API workflow. They now state that 13 July is
-  expected with 99% certainty and that Sinergia will confirm the date by email
-  one week beforehand; the unsupported calculated 6 July date was removed.
+  repaired through the confirmed API workflow. They now preserve the approved
+  statement that the meeting is held on 13 July with 100% certainty and that
+  Sinergia will email everyone one week beforehand to confirm the date.
 
 ## Data rules
 

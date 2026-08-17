@@ -116,6 +116,9 @@ because it was read; it must be integrated into the persistent wiki.
 8. The application may restart the complete read-only Q&A operation once after
    a `BedrockError`. Do not extend this into unbounded retries or retry
    non-Bedrock failures; repeated model calls increase latency and cost.
+   Inside one answer operation, an invalid structured submission followed by
+   free text may receive one new bounded submit reminder; it must not fail only
+   because an earlier reminder was consumed before the invalid submission.
 9. The post-answer evidence verifier is advisory in the POC by default. Its
    score and warning reasons remain observable; only
    `LLM_WIKI_ANSWER_GUARDRAIL_ENABLED=true` permits it to replace an answer.
@@ -139,9 +142,15 @@ because it was read; it must be integrated into the persistent wiki.
     not be inferred as an action or passed into grounded Q&A.
 11. Preserve material qualifiers attached to the requested fact. An expected,
     probabilistic, provisional, or later-confirmed date/value must not become an
-    unconditional answer. If a manager update rewrite introduces a numeric or
+    unconditional answer. Preserve stated confirmation timing and communication
+    method as well as the fact that confirmation occurs. If a manager update rewrite introduces a numeric or
     date detail absent from every current raw source, reject it and request a
     bounded staged-page repair before commit.
+12. Before committing manager-derived rewrites, independently review every
+    material staged claim for entailment by its complete current raw sources.
+    Existing Wiki prose is not evidence. When the manager explicitly requests
+    exact or verbatim wording, at least one maintained canonical page must
+    preserve the complete approved statement rather than merely paraphrasing it.
 
 ## Maintenance checks
 

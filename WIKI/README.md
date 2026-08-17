@@ -223,10 +223,14 @@ effective period, so it proceeds directly to preview instead of asking for a
 calendar year. Before commit, update validation rejects derived Wiki rewrites
 that drop critical numeric/percentage details or a stated confirmation
 condition, or introduce a numeric/date claim absent from all of the page's
-current raw sources. The updater gets one bounded opportunity to repair its
-staged pages before rollback. Grounded answers apply the same principle to
-material percentage and confirmation qualifiers attached to the requested
-value.
+current raw sources. A separate semantic review also checks every material
+staged claim against complete current raw sources; existing Wiki prose is not
+evidence. If the manager explicitly asks for exact or verbatim wording, at
+least one canonical page must preserve the complete statement. The updater
+gets one bounded opportunity to repair its staged pages before rollback.
+Grounded answers apply the same principle to material percentage and
+confirmation qualifiers—including stated timing and communication method—
+attached to the requested value.
 
 This is intentionally a trusted-manager POC, not a production authorization
 model. There is no login, role check, approval queue, rollback UI, or named
@@ -259,6 +263,8 @@ shared source corpus and reindexed by RAG.
   recovered responses expose `debug.answer_attempts: 2` and
   `debug.answer_retry_applied: true`. A second Bedrock failure still returns a
   sanitized 503, and non-Bedrock application errors are never hidden by retries.
+  Within an operation, an invalid structured answer followed by free text can
+  receive one fresh bounded submission reminder instead of failing immediately.
 
 ## Answer confidence
 
