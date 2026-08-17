@@ -11,10 +11,20 @@ from uuid import uuid4
 import streamlit as st
 
 try:
-    from frontend.api_client import ApiDocument, WikiApiClient, WikiApiError
+    from frontend.api_client import (
+        ApiDocument,
+        WikiApiClient,
+        WikiApiError,
+        build_manager_action_command,
+    )
     from frontend.document_status import DocumentStatus, scan_documents
 except ModuleNotFoundError:  # Also support `streamlit run app.py` from frontend/.
-    from api_client import ApiDocument, WikiApiClient, WikiApiError
+    from api_client import (
+        ApiDocument,
+        WikiApiClient,
+        WikiApiError,
+        build_manager_action_command,
+    )
     from document_status import DocumentStatus, scan_documents
 
 
@@ -96,6 +106,27 @@ st.markdown(
 
 
 Document = DocumentStatus | ApiDocument
+
+MANAGER_ACTIONS = {
+    "fix": {
+        "label": "Fix answer",
+        "placeholder": (
+            "It should say the approved limit is €500."
+        ),
+    },
+    "update": {
+        "label": "Update knowledge",
+        "placeholder": (
+            "The approved limit is now €600 from 2027; keep the existing eligibility rules."
+        ),
+    },
+    "add": {
+        "label": "Add knowledge",
+        "placeholder": (
+            "The support desk closes at 18:00."
+        ),
+    },
+}
 
 
 def format_size(size_bytes: int) -> str:
@@ -305,12 +336,132 @@ def render_chat_message(message: dict[str, Any]) -> None:
         if isinstance(confidence_score, (int, float)) and not isinstance(
             confidence_score, bool
         ):
-            st.markdown(f"**Confidence score: {float(confidence_score):.1f}/10**")
+            status = str(message.get("status", "answered"))
+            if status == "insufficient_knowledge":
+                st.markdown(
+                    f"**Abstention confidence: {float(confidence_score):.1f}/10**"
+                )
+            elif status in {"answered", "manager_action_applied"}:
+                st.markdown(
+                    f"**Evidence confidence: {float(confidence_score):.1f}/10**"
+                )
         citations = message.get("citations", [])
         if citations:
             st.caption("Sources")
             for citation in citations:
                 st.code(str(citation), language=None)
+
+
+def render_manager_controls(messages: list[dict[str, Any]]) -> tuple[str | None, bool]:
+    """Render explicit manager controls and return a queued command plus pending state."""
+
+    latest_assistant = next(
+        (message for message in reversed(messages) if message.get("role") == "assistant"),
+        {},
+    )
+    manager_action = latest_assistant.get("manager_action")
+    action_state = (
+        str(manager_action.get("state", ""))
+        if isinstance(manager_action, dict)
+        else ""
+    )
+    pending = action_state in {"proposed", "needs_clarification", "failed", "error"}
+
+    st.caption(
+        "Manager maintenance is explicit. Normal chat stays in Q&A mode; knowledge "
+        "changes always require a preview and confirmation."
+    )
+
+    if pending:
+        if action_state == "needs_clarification":
+            st.info(
+                "This draft is not ready for approval. Provide the requested detail "
+                "or cancel it before continuing Q&A."
+            )
+            with st.form("manager_action_clarification"):
+                clarification = st.text_area(
+                    "Clarification",
+                    placeholder="Provide the missing detail requested above.",
+                )
+                clarify = st.form_submit_button("Send clarification", type="primary")
+            if clarify:
+                if clarification.strip():
+                    return clarification.strip(), True
+                st.warning("Enter the missing detail before sending.")
+        else:
+            st.info(
+                "A manager action is ready. Confirm or cancel it before continuing Q&A."
+            )
+
+        confirm_col, cancel_col = st.columns(2)
+        confirm = confirm_col.button(
+            "Confirm action",
+            type="primary",
+            use_container_width=True,
+            disabled=action_state == "needs_clarification",
+        )
+        cancel = cancel_col.button("Cancel action", use_container_width=True)
+        if confirm:
+            return "/confirm", True
+        if cancel:
+            return "/cancel", True
+        return None, True
+
+    has_prior_question = any(message.get("role") == "user" for message in messages)
+    fix_col, update_col, add_col = st.columns(3)
+    if fix_col.button(
+        "Fix answer",
+        use_container_width=True,
+        disabled=not has_prior_question,
+        help="Correct the previous answer using knowledge already present in the Wiki.",
+    ):
+        if st.session_state.get("manager_action_mode") != "fix":
+            st.session_state.pop("manager_action_details", None)
+        st.session_state.manager_action_mode = "fix"
+    if update_col.button(
+        "Update knowledge",
+        use_container_width=True,
+        help="Replace outdated or incorrect maintained knowledge.",
+    ):
+        if st.session_state.get("manager_action_mode") != "update":
+            st.session_state.pop("manager_action_details", None)
+        st.session_state.manager_action_mode = "update"
+    if add_col.button(
+        "Add knowledge",
+        use_container_width=True,
+        help="Add genuinely new manager-approved knowledge.",
+    ):
+        if st.session_state.get("manager_action_mode") != "add":
+            st.session_state.pop("manager_action_details", None)
+        st.session_state.manager_action_mode = "add"
+
+    mode = st.session_state.get("manager_action_mode")
+    config = MANAGER_ACTIONS.get(mode)
+    if config is None:
+        return None, False
+
+    st.info(
+        f"{config['label']} mode — describe the factual change in a short sentence. "
+        "The preview will show the complete proposed knowledge. "
+        f"Do not type `/{mode}`; the interface adds it automatically."
+    )
+    with st.form("manager_action_form"):
+        st.markdown(f"**{config['label']}**")
+        details = st.text_area(
+            "What changed?",
+            placeholder=config["placeholder"],
+            key="manager_action_details",
+        )
+        preview = st.form_submit_button("Preview action", type="primary")
+    if st.button("Close manager action", key="close_manager_action"):
+        st.session_state.clear_manager_action_on_next_run = True
+        st.rerun()
+    if preview:
+        try:
+            return build_manager_action_command(str(mode), details), True
+        except ValueError as exc:
+            st.warning(str(exc))
+    return None, True
 
 
 api = WikiApiClient()
@@ -392,10 +543,21 @@ if "messages" not in st.session_state:
 if "chat_session_id" not in st.session_state:
     st.session_state.chat_session_id = uuid4().hex
 
+if st.session_state.pop("clear_manager_action_on_next_run", False):
+    st.session_state.pop("manager_action_mode", None)
+    st.session_state.pop("manager_action_details", None)
+
 for message in st.session_state.messages:
     render_chat_message(message)
 
-if question := st.chat_input("Ask a question about your documents..."):
+manager_message, manager_pending = render_manager_controls(st.session_state.messages)
+chat_question = st.chat_input(
+    "Ask a question — use the buttons above to change knowledge.",
+    disabled=manager_pending,
+)
+question = manager_message or chat_question
+
+if question:
     user_message = {"role": "user", "content": question, "citations": []}
     st.session_state.messages.append(user_message)
     render_chat_message(user_message)
@@ -430,7 +592,11 @@ if question := st.chat_input("Ask a question about your documents..."):
                 "content": response.answer,
                 "citations": list(response.citations),
                 "confidence_score": response.confidence_score,
+                "status": response.status,
+                "manager_action": response.manager_action,
             }
+            if manager_message is not None and response.status != "manager_action_error":
+                st.session_state.clear_manager_action_on_next_run = True
         except WikiApiError as exc:
             assistant_message = {
                 "role": "assistant",
@@ -439,4 +605,4 @@ if question := st.chat_input("Ask a question about your documents..."):
             }
 
     st.session_state.messages.append(assistant_message)
-    render_chat_message(assistant_message)
+    st.rerun()

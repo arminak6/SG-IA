@@ -289,6 +289,17 @@ class WikiService:
         if normalized_session_id:
             if (
                 self._session(normalized_session_id) is None
+                and self.correction_interpreter.is_control_command(question)
+            ):
+                return self._correction_response(
+                    status="manager_action_not_pending",
+                    answer=self._no_pending_action_message(),
+                    proposal=None,
+                    state="not_pending",
+                    started_at=started_at,
+                )
+            if (
+                self._session(normalized_session_id) is None
                 and self.correction_interpreter.looks_like_action(question)
             ):
                 self._set_session(
@@ -304,6 +315,14 @@ class WikiService:
             )
             if correction_response is not None:
                 return correction_response
+            if self.correction_interpreter.looks_like_unmarked_action(question):
+                return self._correction_response(
+                    status="manager_action_command_required",
+                    answer=self._action_command_required_message(),
+                    proposal=None,
+                    state="command_required",
+                    started_at=started_at,
+                )
 
         response = self._answer_question(question, started_at=started_at)
         if normalized_session_id:
@@ -463,16 +482,10 @@ class WikiService:
                 started_at=started_at,
             )
 
-        explicit_action = pending is not None or self.correction_interpreter.looks_like_action(
-            message
-        )
-        # A manager can qualify or extend the immediately preceding answer
-        # without repeating command words such as "update knowledge". Review
-        # every established-session follow-up in context; the interpreter
-        # returns None for an ordinary question, which then follows normal Q&A.
-        contextual_follow_up = bool(session.context.question and session.context.answer)
-        should_interpret = explicit_action or contextual_follow_up
-        if not should_interpret:
+        explicit_action = self.correction_interpreter.looks_like_action(message)
+        # Normal chat is always Q&A. Manager interpretation begins only with an
+        # explicit command, or continues after such a command created a draft.
+        if pending is None and not explicit_action:
             return None
         try:
             proposal = self.correction_interpreter.interpret(
@@ -482,10 +495,6 @@ class WikiService:
             )
         except Exception as exc:
             logger.warning("Manager action interpretation unavailable (%s)", type(exc).__name__)
-            if pending is None and not explicit_action:
-                # A best-effort contextual classification failure must not
-                # prevent an ordinary follow-up question from reaching Q&A.
-                return None
             return self._correction_response(
                 status="manager_action_error",
                 answer=self._correction_error_message(
@@ -505,7 +514,7 @@ class WikiService:
                 proposal,
                 needs_clarification=True,
                 clarification_question=(
-                    "Ask the Wiki question first, then submit Fix answer after the "
+                    "Ask the Wiki question first, then submit /fix after the "
                     "incorrect response so the existing evidence can be reviewed."
                 ),
             )
@@ -631,6 +640,7 @@ class WikiService:
                 continue
             citations.append({"wiki_path": page, "source_paths": sources})
 
+        proposal = replace(proposal, pages_updated=tuple(pages_written))
         self._set_session(session_id, replace(session, pending=None))
         try:
             self.repository.append_log(
@@ -770,16 +780,30 @@ class WikiService:
                 started_at=started_at,
             )
         if not plan.supported:
+            converted = self._convert_answer_fix_to_update(
+                proposal,
+                session.context,
+                review_usage=plan.usage,
+            )
+            self._set_session(session_id, replace(session, pending=converted))
             return self._correction_response(
-                status="manager_action_failed",
-                answer=self._answer_fix_unsupported_message(
-                    proposal.language,
+                status=(
+                    "manager_action_proposed"
+                    if converted.ready_for_confirmation
+                    else "manager_action_needs_clarification"
+                ),
+                answer=self._answer_fix_converted_message(
+                    converted,
                     plan.explanation,
                 ),
-                proposal=proposal,
-                state="failed",
+                proposal=converted,
+                state=(
+                    "proposed"
+                    if converted.ready_for_confirmation
+                    else "needs_clarification"
+                ),
                 started_at=started_at,
-                usage=plan.usage,
+                usage=converted.usage,
             )
 
         try:
@@ -889,6 +913,61 @@ class WikiService:
             confidence_score=confidence.score,
         )
 
+    @staticmethod
+    def _convert_answer_fix_to_update(
+        proposal: ManagerActionProposal,
+        context: ManagerActionContext,
+        *,
+        review_usage: Mapping[str, int],
+    ) -> ManagerActionProposal:
+        """Turn an ungrounded answer fix into a non-writing update proposal."""
+
+        usage = dict(proposal.usage)
+        for key, value in review_usage.items():
+            usage[str(key)] = usage.get(str(key), 0) + int(value)
+
+        scope = proposal.scope.strip()
+        if not scope:
+            wiki_paths = [
+                str(citation.get("wiki_path", "")).strip()
+                for citation in context.citations
+                if isinstance(citation, Mapping)
+            ]
+            scope = ", ".join(dict.fromkeys(path for path in wiki_paths if path))
+
+        previous_value = proposal.previous_value.strip() or context.answer.strip()
+        converted = replace(
+            proposal,
+            action_type="update_knowledge",
+            previous_value=previous_value,
+            scope=scope,
+            reason=(
+                proposal.reason.strip()
+                or "The manager correction is not supported by the maintained Wiki evidence."
+            ),
+            needs_clarification=False,
+            clarification_question="",
+            usage=usage,
+        )
+        if not converted.ready_for_confirmation:
+            missing: list[str] = []
+            if not converted.subject:
+                missing.append("subject")
+            if not converted.previous_value:
+                missing.append("current value")
+            if not converted.new_value:
+                missing.append("new value")
+            if not converted.scope:
+                missing.append("scope")
+            converted = replace(
+                converted,
+                needs_clarification=True,
+                clarification_question=(
+                    "Please provide the missing update details: " + ", ".join(missing) + "."
+                ),
+            )
+        return converted
+
     def _proposal_response(
         self,
         proposal: ManagerActionProposal,
@@ -962,8 +1041,42 @@ class WikiService:
             question=question,
             answer=str(response.get("answer", "")),
             citations=citations,
+            maintained_knowledge=self._maintained_manager_knowledge(citations),
         )
         self._set_session(session_id, ManagerActionSession(context=context))
+
+    def _maintained_manager_knowledge(
+        self,
+        citations: tuple[dict[str, object], ...],
+    ) -> tuple[dict[str, str], ...]:
+        """Load cited stable manager snapshots for a later merge preview."""
+
+        prefix = "raw/manager-knowledge/"
+        snapshots: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for citation in citations:
+            values = citation.get("source_paths", [])
+            if not isinstance(values, list):
+                continue
+            for value in values:
+                try:
+                    source_path = self.repository.normalize_source_path(str(value))
+                except RepositoryError:
+                    continue
+                folded = source_path.casefold()
+                if not folded.startswith(prefix) or folded in seen:
+                    continue
+                try:
+                    content = self.repository.read_raw(source_path)
+                except RepositoryError:
+                    continue
+                marker = "## Current approved knowledge"
+                current_value = content.split(marker, 1)[1].strip() if marker in content else content.strip()
+                snapshots.append(
+                    {"source_path": source_path, "current_value": current_value}
+                )
+                seen.add(folded)
+        return tuple(snapshots)
 
     def _session(self, session_id: str) -> ManagerActionSession | None:
         with self._session_lock:
@@ -990,15 +1103,20 @@ class WikiService:
         }
         action_label = labels.get(proposal.action_type, proposal.action_type)
         if proposal.language == "italian":
+            heading = (
+                "**Azione proposta dal manager — approvazione richiesta**"
+                if proposal.ready_for_confirmation
+                else "**Azione del manager — servono altre informazioni**"
+            )
             lines = [
-                "**Azione proposta dal manager — approvazione richiesta**",
+                heading,
                 "",
                 f"- Tipo di azione: {action_label}",
                 f"- Modifica le fonti di conoscenza: {'Sì' if proposal.changes_knowledge else 'No'}",
                 f"- Manutenzione della Wiki derivata: {'Sì' if proposal.wiki_maintenance else 'No'}",
                 f"- Argomento: {proposal.subject or 'Da specificare'}",
                 f"- Valore precedente: {proposal.previous_value or 'Non isolato'}",
-                f"- Nuovo valore: {proposal.new_value or 'Da specificare'}",
+                f"- Conoscenza completa proposta: {proposal.new_value or 'Da specificare'}",
                 f"- Ambito: {proposal.scope or 'Da specificare'}",
                 f"- Periodo di validità: {effective}",
             ]
@@ -1006,22 +1124,27 @@ class WikiService:
                 lines.extend(
                     [
                         "",
-                        "Nessuna azione è stata ancora applicata. Rispondi **Confermo** "
-                        "per procedere, oppure **Annulla**.",
+                        "Nessuna azione è stata ancora applicata. Rispondi **/confermo** "
+                        "per procedere, oppure **/annulla**.",
                     ]
                 )
             else:
                 lines.extend(["", proposal.clarification_question])
             return "\n".join(lines)
+        heading = (
+            "**Proposed manager action — approval required**"
+            if proposal.ready_for_confirmation
+            else "**Manager action — more information required**"
+        )
         lines = [
-            "**Proposed manager action — approval required**",
+            heading,
             "",
             f"- Action type: {action_label}",
             f"- Changes source knowledge: {'Yes' if proposal.changes_knowledge else 'No'}",
             f"- Maintains derived Wiki pages: {'Yes' if proposal.wiki_maintenance else 'No'}",
             f"- Subject: {proposal.subject or 'Not specified'}",
             f"- Previous value: {proposal.previous_value or 'Not isolated'}",
-            f"- New/corrected value: {proposal.new_value or 'Not specified'}",
+            f"- Proposed complete knowledge: {proposal.new_value or 'Not specified'}",
             f"- Scope: {proposal.scope or 'Not specified'}",
             f"- Effective period: {effective}",
         ]
@@ -1029,7 +1152,7 @@ class WikiService:
             lines.extend(
                 [
                     "",
-                    "Nothing has been applied yet. Reply **Confirm** to proceed, or **Cancel**.",
+                    "Nothing has been applied yet. Reply **/confirm** to proceed, or **/cancel**.",
                 ]
             )
         else:
@@ -1094,6 +1217,27 @@ class WikiService:
         )
         return f"{prefix}\n\n{detail}" if detail else prefix
 
+    @classmethod
+    def _answer_fix_converted_message(
+        cls,
+        proposal: ManagerActionProposal,
+        detail: str,
+    ) -> str:
+        if proposal.language == "italian":
+            prefix = (
+                "La correzione non è supportata dalle conoscenze Wiki esistenti, quindi "
+                "è stata convertita in una proposta di **Aggiornamento conoscenza**. "
+                "Nessuna modifica è stata ancora applicata ed è necessaria una nuova conferma."
+            )
+        else:
+            prefix = (
+                "The correction is not supported by the existing Wiki knowledge, so it "
+                "has been converted to an **Update knowledge** proposal. Nothing has been "
+                "changed yet, and a new confirmation is required."
+            )
+        explanation = f"\n\n{detail}" if detail else ""
+        return f"{prefix}{explanation}\n\n{cls._proposal_message(proposal)}"
+
     @staticmethod
     def _cancelled_message(language: str) -> str:
         if language == "italian":
@@ -1104,12 +1248,28 @@ class WikiService:
     def _correction_error_message(language: str) -> str:
         if language == "italian":
             return (
-                "Non sono riuscito a strutturare l'azione. Specifica: Correggi risposta, "
-                "Aggiorna conoscenza oppure Aggiungi conoscenza."
+                "Non sono riuscito a strutturare l'azione. Inizia con /fix, /update "
+                "oppure /add."
             )
         return (
-            "I could not structure that manager action. Specify Fix answer, Update "
-            "knowledge, or Add knowledge and provide the relevant details."
+            "I could not structure that manager action. Start with /fix, /update, "
+            "or /add and provide the relevant details."
+        )
+
+    @staticmethod
+    def _no_pending_action_message() -> str:
+        return (
+            "There is no pending manager action to confirm or cancel. Start the "
+            "action again with Fix answer, Update knowledge, or Add knowledge, "
+            "then review its preview."
+        )
+
+    @staticmethod
+    def _action_command_required_message() -> str:
+        return (
+            "This looks like a knowledge replacement, but normal chat is Q&A only. "
+            "Click **Update knowledge** and enter the short change in the manager "
+            "form. The interface adds `/update` automatically."
         )
 
     @staticmethod

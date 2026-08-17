@@ -70,15 +70,24 @@ class FixedInterpreter:
 
     @staticmethod
     def looks_like_action(message):
-        return message.casefold().startswith(("fix answer", "add knowledge", "update knowledge"))
+        return message.casefold().startswith(("/fix", "/add", "/update"))
 
     @staticmethod
     def is_confirmation(message):
-        return message.casefold().strip() == "confirm"
+        return message.casefold().strip().lstrip("/") == "confirm"
 
     @staticmethod
     def is_cancellation(message):
-        return message.casefold().strip() == "cancel"
+        return message.casefold().strip().lstrip("/") == "cancel"
+
+    @staticmethod
+    def is_control_command(message):
+        return message.casefold().strip() in {"/confirm", "/cancel"}
+
+    @staticmethod
+    def looks_like_unmarked_action(message):
+        lowered = message.casefold()
+        return lowered.startswith("for ") and " replace " in lowered and " with " in lowered
 
     def interpret(self, context, message, *, draft=None):
         return self.proposal
@@ -215,14 +224,14 @@ The source contains the approved procedure.
             service.ask("What is the procedure?", session_id="manager-fix")
             before = repository.read_wiki_page("concepts/procedure.md")
             proposed = service.ask(
-                "Fix answer: use the documented approved procedure.",
+                "/fix Use the documented approved procedure.",
                 session_id="manager-fix",
             )
             self.assertEqual(proposed["status"], "manager_action_proposed")
             self.assertFalse(proposed["manager_action"]["changes_knowledge"])
             self.assertEqual(repository.read_wiki_page("concepts/procedure.md"), before)
 
-            applied = service.ask("Confirm", session_id="manager-fix")
+            applied = service.ask("/confirm", session_id="manager-fix")
             after = repository.read_wiki_page("concepts/procedure.md")
             raw_actions = list((repository.raw_root / "manager-actions").glob("*.md"))
             feedback = list((repository.backend_root / "feedback" / "answer-fixes").glob("*.json"))
@@ -234,7 +243,7 @@ The source contains the approved procedure.
         self.assertEqual(len(feedback), 1)
         self.assertEqual(applied["confidence_score"], 9.4)
 
-    def test_unsupported_fix_is_rejected_without_any_persistent_change(self):
+    def test_unsupported_fix_becomes_update_proposal_without_persistent_change(self):
         with tempfile.TemporaryDirectory() as root:
             repository = self._repository(root)
             service = self._service(
@@ -246,17 +255,105 @@ The source contains the approved procedure.
             service.ask("What is the procedure?", session_id="manager-unsupported")
             before = repository.read_wiki_page("concepts/procedure.md")
             service.ask(
-                "Fix answer: use a different unsupported procedure.",
+                "/fix Use a different unsupported procedure.",
                 session_id="manager-unsupported",
             )
-            result = service.ask("Confirm", session_id="manager-unsupported")
+            result = service.ask("/confirm", session_id="manager-unsupported")
             raw_actions = list((repository.raw_root / "manager-actions").glob("*.md"))
             feedback_root = repository.backend_root / "feedback" / "answer-fixes"
 
-            self.assertEqual(result["status"], "manager_action_failed")
+            self.assertEqual(result["status"], "manager_action_proposed")
+            self.assertEqual(
+                result["manager_action"]["action_type"],
+                "update_knowledge",
+            )
+            self.assertTrue(result["manager_action"]["changes_knowledge"])
+            self.assertIn("new confirmation is required", result["answer"])
             self.assertEqual(repository.read_wiki_page("concepts/procedure.md"), before)
             self.assertEqual(raw_actions, [])
             self.assertFalse(feedback_root.exists())
+
+    def test_converted_update_requires_second_confirmation_before_apply(self):
+        with tempfile.TemporaryDirectory() as root:
+            repository = self._repository(root)
+            store = ReversibleKnowledgeStore()
+            service = self._service(
+                root,
+                repository,
+                action("fix_answer"),
+                store=store,
+                reviewer=UnsupportedReviewer(),
+            )
+            service.ask("What is the procedure?", session_id="manager-convert")
+            service.ask(
+                "/fix Use a different manager-approved procedure.",
+                session_id="manager-convert",
+            )
+
+            converted = service.ask("/confirm", session_id="manager-convert")
+            self.assertEqual(converted["status"], "manager_action_proposed")
+            self.assertEqual(store.calls, [])
+
+            successful_update = {
+                "processed": [
+                    {
+                        "source_path": "raw/manager-knowledge/procedure.md",
+                        "pages_written": ["concepts/procedure.md"],
+                        "usage": {},
+                    }
+                ],
+                "skipped": [],
+                "failed": [],
+            }
+            with patch.object(
+                service,
+                "_update_existing_knowledge",
+                return_value=successful_update,
+            ):
+                applied = service.ask("/confirm", session_id="manager-convert")
+
+            self.assertEqual(applied["status"], "manager_action_applied")
+            self.assertEqual(len(store.calls), 1)
+            self.assertEqual(store.calls[0][0].action_type, "update_knowledge")
+
+    def test_answer_context_loads_cited_manager_snapshot_for_update_merge(self):
+        with tempfile.TemporaryDirectory() as root:
+            repository = self._repository(root)
+            source_path, _ = repository.write_manager_knowledge_source(
+                "meeting.md",
+                """# Manager Knowledge: Meeting
+
+## Current approved knowledge
+
+The meeting is held annually on 13 July.
+""",
+            )
+            service = self._service(root, repository, action("update_knowledge"))
+
+            service._remember_answer(
+                "manager-snapshot",
+                "When is the meeting?",
+                {
+                    "answer": "The meeting is held annually on 13 July.",
+                    "citations": [
+                        {
+                            "wiki_path": "entities/meeting.md",
+                            "source_paths": [source_path],
+                        }
+                    ],
+                },
+            )
+            context = service._session("manager-snapshot").context
+
+        self.assertEqual(
+            context.maintained_knowledge,
+            (
+                {
+                    "source_path": "raw/manager-knowledge/meeting.md",
+                    "current_value": "The meeting is held annually on 13 July.",
+                },
+            ),
+        )
 
     def test_add_knowledge_can_start_without_previous_answer_and_requires_confirmation(self):
         with tempfile.TemporaryDirectory() as root:
@@ -264,7 +361,7 @@ The source contains the approved procedure.
             store = FakeKnowledgeStore()
             service = self._service(root, repository, action("add_knowledge"), store=store)
             proposed = service.ask(
-                "Add knowledge: use the documented approved procedure.",
+                "/add Use the documented approved procedure.",
                 session_id="manager-add",
             )
             self.assertEqual(proposed["status"], "manager_action_proposed")
@@ -282,7 +379,7 @@ The source contains the approved procedure.
                 "failed": [],
             }
             with patch.object(service, "update_wiki", return_value=update_result) as update:
-                applied = service.ask("Confirm", session_id="manager-add")
+                applied = service.ask("/confirm", session_id="manager-add")
 
         self.assertEqual(applied["status"], "manager_action_applied")
         self.assertEqual(len(store.calls), 1)
@@ -291,7 +388,54 @@ The source contains the approved procedure.
             allow_manager_knowledge=True,
         )
 
-    def test_contextual_statement_is_interpreted_as_update_without_command_words(self):
+    def test_short_add_creates_disposable_manager_source_and_temp_state_is_removed(self):
+        temporary_root: Path | None = None
+        with tempfile.TemporaryDirectory() as root:
+            temporary_root = Path(root)
+            repository = self._repository(root)
+            short_add = replace(
+                action("add_knowledge"),
+                subject="Support desk hours",
+                new_value="The support desk closes at 18:00.",
+                scope="all offices",
+            )
+            service = self._service(
+                root,
+                repository,
+                short_add,
+                store=ManagerActionStore(repository),
+            )
+            proposed = service.ask(
+                "/add The support desk closes at 18:00 for all offices.",
+                session_id="manager-short-add",
+            )
+
+            def successful_update(paths, *, allow_manager_knowledge=False):
+                return {
+                    "processed": [
+                        {
+                            "source_path": paths[0],
+                            "pages_written": [],
+                            "usage": {},
+                        }
+                    ],
+                    "skipped": [],
+                    "failed": [],
+                }
+
+            with patch.object(service, "update_wiki", side_effect=successful_update):
+                applied = service.ask("/confirm", session_id="manager-short-add")
+
+            sources = list((repository.raw_root / "manager-knowledge").glob("*.md"))
+            self.assertEqual(proposed["status"], "manager_action_proposed")
+            self.assertEqual(applied["status"], "manager_action_applied")
+            self.assertEqual(len(sources), 1)
+            self.assertIn("support desk", sources[0].read_text(encoding="utf-8").casefold())
+
+        self.assertIsNotNone(temporary_root)
+        self.assertFalse(temporary_root.exists())
+
+    def test_new_question_after_answer_bypasses_manager_action_interpreter(self):
         with tempfile.TemporaryDirectory() as root:
             repository = self._repository(root)
             store = FakeKnowledgeStore()
@@ -303,16 +447,32 @@ The source contains the approved procedure.
             )
             service.ask("When is the procedure used?", session_id="manager-context")
 
-            proposed = service.ask(
-                "Yes, but it is tentative and employees should be notified in advance.",
+            answer = service.ask(
+                "What Fondo Est limits are indicated for maternity, glasses/lenses and physiotherapy?",
                 session_id="manager-context",
             )
 
-        self.assertEqual(proposed["status"], "manager_action_proposed")
-        self.assertEqual(
-            proposed["manager_action"]["action_type"], "update_knowledge"
-        )
+        self.assertEqual(answer["status"], "answered")
+        self.assertIsNone(answer.get("manager_action"))
         self.assertEqual(store.calls, [])
+
+    def test_unmarked_replacement_gets_manager_form_guidance_instead_of_qa(self):
+        with tempfile.TemporaryDirectory() as root:
+            repository = self._repository(root)
+            service = self._service(
+                root,
+                repository,
+                action("update_knowledge"),
+            )
+            service.ask("What is the current policy?", session_id="manager-guidance")
+
+            result = service.ask(
+                'For the policy, replace "the old value" with "the new value".',
+                session_id="manager-guidance",
+            )
+
+        self.assertEqual(result["status"], "manager_action_command_required")
+        self.assertIn("click **update knowledge**", result["answer"].casefold())
 
     def test_add_then_update_reuses_one_stable_manager_source(self):
         with tempfile.TemporaryDirectory() as root:
@@ -357,7 +517,11 @@ The source contains the approved procedure.
                 replace(
                     action("update_knowledge"),
                     subject="Approved procedure instruction",
-                    new_value="Use the revised approved procedure.",
+                    new_value=(
+                        "Use the revised approved procedure and retain the documented "
+                        "approval step."
+                    ),
+                    manager_input="Also retain the documented approval step.",
                 ),
                 linked_context,
             )
@@ -368,7 +532,11 @@ The source contains the approved procedure.
                 update_write.source_path,
                 "raw/manager-knowledge/generic-operating-procedure.md",
             )
-            self.assertIn("Use the revised approved procedure.", update_content)
+            self.assertIn(
+                "Use the revised approved procedure and retain the documented approval step.",
+                update_content,
+            )
+            self.assertNotIn("Also retain", update_content)
             self.assertNotIn("Old procedure", update_content)
             self.assertNotIn("Superseded value", update_content)
             self.assertEqual(len(repository.list_raw_documents()), 2)
@@ -405,7 +573,7 @@ The source contains the approved procedure.
             )
             service.ask("What is the procedure?", session_id="manager-rollback")
             service.ask(
-                "Update knowledge: use the replacement procedure.",
+                "/update Use the replacement procedure.",
                 session_id="manager-rollback",
             )
             failed_update = {
@@ -423,7 +591,7 @@ The source contains the approved procedure.
                 "_update_existing_knowledge",
                 return_value=failed_update,
             ):
-                result = service.ask("Confirm", session_id="manager-rollback")
+                result = service.ask("/confirm", session_id="manager-rollback")
 
             pending = service._session("manager-rollback").pending
 

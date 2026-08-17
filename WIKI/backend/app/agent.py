@@ -277,7 +277,12 @@ source path in YAML frontmatter and the Sources section. Make the approved
 current value unambiguous and remove the obsolete manager-maintained value;
 history belongs in the operation log, not active knowledge prose. Stage
 complete Markdown pages with level-one headings. Touch only pages needed for
-the stated update. Do not write index.md or log.md; the application maintains
+the stated update. Preserve uncertainty, future intent, and confirmation
+conditions exactly as stated. Do not calculate or introduce a more specific
+calendar date from relative timing unless the source explicitly states it. A
+number or date that appears only in the old Wiki prose but not in any current
+raw source is obsolete derived content and must be removed. Do not write
+index.md or log.md; the application maintains
 them deterministically. Once the first page write succeeds, discovery is
 closed. When all necessary writes have succeeded, make no more tool calls and
 finish with a short summary.
@@ -291,6 +296,10 @@ must finish by calling submit_answer with status `answered`, at least one wiki
 page citation, and every raw source path listed by each cited page. Call
 submit_answer alone in a later tool turn, after the relevant full-page reads
 have been returned to you.
+Preserve material qualifiers attached to the requested fact. If the evidence
+says a date or value is expected, probabilistic, provisional, or subject to a
+later confirmation, include that condition in the answer; never simplify it
+into an unconditional scheduled or fixed fact.
 If the wiki cannot support an answer, submit status `insufficient_knowledge` and
 say what is missing. Never answer only as free text.
 """.strip()
@@ -545,6 +554,20 @@ class WikiAgent:
                             "The update is incomplete. Stage a complete rewrite of at least one "
                             "approved existing Wiki page now. Do not create a page."
                         )
+                    else:
+                        try:
+                            self._validate_ingestion(
+                                source_path,
+                                source_read=source_read,
+                                staged=staged,
+                                writable_existing_pages=writable_existing_pages,
+                            )
+                        except AgentValidationError as exc:
+                            repair_instruction = (
+                                f"The staged update is not safe: {exc} Rewrite the affected "
+                                "approved page(s) now, using only claims present in their "
+                                "current raw sources."
+                            )
                 elif not any(path.casefold().startswith("sources/") for path in staged):
                     repair_instruction = (
                         "Ingestion is incomplete. Stage the mandatory complete source-summary "
@@ -660,6 +683,7 @@ class WikiAgent:
                     "Manager updates cannot create or rewrite unapproved Wiki pages: "
                     + ", ".join(disallowed)
                 )
+            self._validate_manager_update_fidelity(source_path, staged)
         elif not any(page_path.casefold().startswith("sources/") for page_path in staged):
             raise AgentValidationError(
                 "Ingestion ended without staging the mandatory source-summary page."
@@ -691,6 +715,124 @@ class WikiAgent:
                 raise AgentValidationError(
                     f"Update to {page_path} removed existing source provenance: {', '.join(missing)}"
                 )
+
+    def _validate_manager_update_fidelity(
+        self,
+        source_path: str,
+        staged: Mapping[str, str],
+    ) -> None:
+        """Reject a derived rewrite that drops critical manager-supplied markers."""
+
+        source = self.repository.read_raw(source_path)
+        marker = "## Current approved knowledge"
+        approved = source.split(marker, 1)[1] if marker in source else source
+        combined = "\n".join(staged.values())
+        approved_folded = approved.casefold()
+        combined_folded = combined.casefold()
+
+        missing: list[str] = []
+        numeric_markers = dict.fromkeys(
+            re.findall(r"(?<!\w)\d+(?:[.,]\d+)?\s*%?", approved_folded)
+        )
+        for value in numeric_markers:
+            normalized = re.sub(r"\s+", "", value)
+            target = re.sub(r"\s+", "", combined_folded)
+            if normalized not in target:
+                missing.append(value.strip())
+
+        confirmation_terms = ("confirm", "conferm")
+        if any(term in approved_folded for term in confirmation_terms) and not any(
+            term in combined_folded for term in confirmation_terms
+        ):
+            missing.append("confirmation condition")
+
+        if missing:
+            raise AgentValidationError(
+                "Manager update rewrite omitted critical approved detail(s): "
+                + ", ".join(missing)
+            )
+
+        for page_path, content in staged.items():
+            claimed_numbers = self._numeric_markers(self._wiki_claim_body(content))
+            if not claimed_numbers:
+                continue
+            source_text: list[str] = []
+            for provenance in self.repository.page_source_paths(page_path, content=content):
+                try:
+                    source_text.append(self.repository.read_raw(provenance))
+                except RepositoryError:
+                    continue
+            supported_numbers = self._numeric_markers("\n".join(source_text))
+            unsupported = sorted(claimed_numbers - supported_numbers)
+            if unsupported:
+                raise AgentValidationError(
+                    f"Manager update rewrite introduced unsupported numeric/date detail(s) "
+                    f"in {page_path}: {', '.join(unsupported)}"
+                )
+
+    @staticmethod
+    def _numeric_markers(value: str) -> set[str]:
+        return {
+            re.sub(r"\s+", "", marker)
+            for marker in re.findall(r"(?<!\w)\d+(?:[.,]\d+)?\s*%?", value.casefold())
+        }
+
+    @staticmethod
+    def _wiki_claim_body(content: str) -> str:
+        body = content
+        if body.startswith("---"):
+            parts = body.split("---", 2)
+            if len(parts) == 3:
+                body = parts[2]
+        body = re.split(
+            r"^##\s+Sources\s*$",
+            body,
+            maxsplit=1,
+            flags=re.IGNORECASE | re.MULTILINE,
+        )[0]
+        body = re.sub(r"(?m)^\s*\d+[.)]\s+", "", body)
+        body = re.sub(r"\[[^\]]*\]\([^)]*\)", "", body)
+        return body
+
+    @classmethod
+    def _validate_answer_qualifiers(
+        cls,
+        answer: str,
+        cited_page_contents: list[str],
+    ) -> None:
+        """Keep material uncertainty and confirmation attached to cited values."""
+
+        answer_numbers = cls._numeric_markers(answer)
+        if not answer_numbers:
+            return
+        relevant_paragraphs: list[str] = []
+        for content in cited_page_contents:
+            body = cls._wiki_claim_body(content)
+            for paragraph in re.split(r"\n\s*\n", body):
+                if answer_numbers & cls._numeric_markers(paragraph):
+                    relevant_paragraphs.append(paragraph)
+        if not relevant_paragraphs:
+            return
+
+        evidence = "\n".join(relevant_paragraphs).casefold()
+        answer_folded = answer.casefold()
+        evidence_percentages = {
+            marker for marker in cls._numeric_markers(evidence) if marker.endswith("%")
+        }
+        missing_percentages = sorted(evidence_percentages - answer_numbers)
+        if missing_percentages:
+            raise AgentValidationError(
+                "The answer omitted an evidence qualifier attached to the requested value: "
+                + ", ".join(missing_percentages)
+            )
+
+        confirmation_terms = ("confirm", "conferm")
+        if any(term in evidence for term in confirmation_terms) and not any(
+            term in answer_folded for term in confirmation_terms
+        ):
+            raise AgentValidationError(
+                "The answer omitted the evidence's confirmation condition for the requested value."
+            )
 
     def answer(self, question: str) -> AnswerResult:
         question = question.strip()
@@ -747,6 +889,7 @@ class WikiAgent:
                 raise AgentValidationError("Citations must be a list.")
 
             citations: list[Citation] = []
+            cited_page_contents: list[str] = []
             seen: set[tuple[str, tuple[str, ...]]] = set()
             for item in raw_citations:
                 if not isinstance(item, Mapping):
@@ -762,6 +905,7 @@ class WikiAgent:
                 if not isinstance(source_values, list):
                     raise AgentValidationError("Citation source_paths must be a list.")
                 page_content = self.repository.read_wiki_page(wiki_path)
+                cited_page_contents.append(page_content)
                 sources: list[str] = []
                 for value in source_values:
                     source = self.repository.normalize_source_path(str(value))
@@ -794,6 +938,8 @@ class WikiAgent:
                     seen.add(key)
             if status == "answered" and not citations:
                 raise AgentValidationError("A grounded answer requires at least one citation.")
+            if status == "answered":
+                self._validate_answer_qualifiers(answer, cited_page_contents)
             citations.sort(key=lambda item: item.wiki_path.casefold())
             return AnswerResult(
                 status=str(status),
@@ -805,6 +951,7 @@ class WikiAgent:
                 search_modes=tuple(search_modes),
                 retrieval_diagnostics=tuple(retrieval_diagnostics),
             )
+
 
         tools = [LIST_WIKI_TOOL, READ_WIKI_TOOL, SEARCH_WIKI_TOOL, SUBMIT_ANSWER_TOOL]
         for _ in range(self.max_steps):

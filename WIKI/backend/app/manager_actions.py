@@ -27,12 +27,14 @@ class ManagerActionContext:
     question: str
     answer: str
     citations: tuple[dict[str, object], ...]
+    maintained_knowledge: tuple[dict[str, str], ...] = ()
 
     def to_dict(self) -> dict[str, object]:
         return {
             "question": self.question,
             "answer": self.answer,
             "citations": [dict(item) for item in self.citations],
+            "maintained_knowledge": [dict(item) for item in self.maintained_knowledge],
         }
 
 
@@ -50,6 +52,7 @@ class ManagerActionProposal:
     clarification_question: str
     language: str
     usage: dict[str, int]
+    manager_input: str = ""
     source_path: str | None = None
     feedback_path: str | None = None
     pages_updated: tuple[str, ...] = ()
@@ -68,8 +71,6 @@ class ManagerActionProposal:
             return False
         if not self.subject or not self.new_value:
             return False
-        if self.changes_knowledge and not self.scope:
-            return False
         if self.action_type == "update_knowledge" and not self.previous_value:
             return False
         return True
@@ -85,6 +86,8 @@ class ManagerActionProposal:
             "subject": self.subject,
             "previous_value": self.previous_value,
             "corrected_value": self.new_value,
+            "proposed_knowledge": self.new_value,
+            "manager_input": self.manager_input,
             "scope": self.scope,
             "effective_period": self.effective_period,
             "source_path": self.source_path,
@@ -110,7 +113,7 @@ class ManagerKnowledgeWrite:
 MANAGER_ACTION_TOOL = {
     "toolSpec": {
         "name": "submit_manager_action",
-        "description": "Classify and structure a trusted manager action for the Wiki POC.",
+        "description": "Structure an explicitly requested trusted-manager action.",
         "inputSchema": {
             "json": {
                 "type": "object",
@@ -158,54 +161,101 @@ MANAGER_ACTION_TOOL = {
 }
 
 
-MANAGER_ACTION_PROMPT = """You classify and structure actions from a trusted manager in a Wiki proof of concept.
+MANAGER_ACTION_PROMPT = """You structure an explicitly requested action from a trusted manager in a Wiki proof of concept.
 
-Use only the application-supplied previous interaction, draft, and manager message. Choose exactly one:
+The backend accepts a new manager action only when the message starts with /fix, /update, or /add.
+The application-supplied required_action_type is authoritative; never change it based on the prose that
+follows the command. Use only the supplied previous interaction, draft, and manager message:
 - fix_answer: the Wiki already contains the correct information, but the previous LLM answer retrieved,
   interpreted, ordered, or expressed it incorrectly. This adds no source knowledge.
 - update_knowledge: maintained knowledge is outdated or wrong and the manager supplies a replacement.
 - add_knowledge: the manager supplies genuinely new information absent from maintained knowledge.
-- unclear: the message does not distinguish these cases.
+- unclear: required details for the selected action are missing or ambiguous.
 
-The manager may express a change contextually without command words. For example, a declarative follow-up
-that qualifies the previous fact as tentative, adds an operational requirement to the same subject, or
-replaces part of the previous answer is an update_knowledge candidate. Combine all supplied changes into
-one complete new_value. Use add_knowledge only for a genuinely new standalone subject or record, not for
-an extra detail that belongs to the existing subject. A question or request for explanation is a normal
-follow-up, not a manager action.
+Combine all supplied changes into one complete new_value. For update_knowledge, new_value is the complete
+current approved statement after applying the manager's change to the previous approved knowledge; it is
+never just the incremental instruction or raw manager wording. Preserve still-valid facts, replace facts
+the manager explicitly corrects, and retain uncertainty, modality, and confirmation conditions exactly.
+Do not turn relative timing into a calculated calendar date unless the manager supplied that date. Use
+add_knowledge only for a genuinely new standalone subject or record, not for an extra detail that belongs
+to the existing subject. While refining an existing draft, preserve its action type and treat the new
+message only as clarification.
 
-Call submit_manager_action exactly once. Never guess between fix_answer and a knowledge change: request
-clarification when ambiguous, including when it is unclear whether the manager wants to persist a comment.
-Preserve useful draft fields and prior citation scope. For time-dependent knowledge changes, require the
-effective period. If a calendar date is incomplete or invalid without a year, request the missing detail
-instead of inventing it. Never invent domain details.
+Managers may write one short human sentence. When it is unambiguous, reuse the subject, previous value,
+scope, cited context, and maintained_knowledge snapshot from the previous interaction instead of requiring
+the manager to restate them. A proposed update new_value may contain still-valid facts from the previous
+approved answer or maintained_knowledge snapshot plus facts the
+manager explicitly supplied, with minor grammatical normalization. It must not add any other claim. Never
+infer extra historical occurrences, dates, applicability, or consequences from the previous answer or
+from a recurring rule. Previous interaction context may fill subject, previous_value, scope, and the
+still-valid baseline that is explicitly visible in the complete merged preview.
+A recurring statement such as "every year" or "ogni anno" is complete without a calendar year: preserve
+the recurrence in new_value and record it as the effective_period. A complete calendar date supplies its
+own effective year. Ask only for information that is genuinely missing; do not demand formal field labels
+or polished wording.
+
+Call submit_manager_action exactly once with is_manager_action=true. Request clarification when required
+details for the selected action are ambiguous. Preserve useful draft fields and prior citation scope. For
+time-dependent knowledge changes, require the effective period. If a calendar date is incomplete or
+invalid without a year, request the missing detail instead of inventing it. Never invent domain details.
 """
 
 
 class ManagerActionInterpreter:
     """Interpret manager messages into one of three explicit action types."""
 
-    _ACTION_CUES = re.compile(
-        r"^\s*(?:no\b|incorrect\b|wrong\b|actually\b|correction\b|correct\s+yourself\b|"
-        r"fix\s+(?:the\s+)?answer\b|update\s+(?:the\s+)?(?:wiki|knowledge)\b|"
-        r"add\s+(?:new\s+)?(?:wiki\s+)?knowledge\b|new\s+knowledge\b|"
-        r"that(?:'s|\s+is)\s+wrong\b|è\s+sbagliat[oa]\b|e\s+sbagliat[oa]\b|"
-        r"correggi\b|correzione\b|aggiorna\b|aggiungi\b|in\s+realtà\b)",
-        flags=re.IGNORECASE,
+    _ACTION_COMMAND = re.compile(
+        r"^\s*/(?P<command>fix|update|add)(?=\s|$)", re.IGNORECASE
     )
-    _CONFIRMATIONS = frozenset(
-        {"confirm", "confirmed", "yes", "yes confirm", "approve", "apply", "confermo", "approva", "applica", "si", "sì"}
+    _CONTROL_COMMAND = re.compile(
+        r"^\s*/(?:confirm|approve|cancel|confermo|approva|annulla)\s*$",
+        re.IGNORECASE,
     )
-    _CANCELLATIONS = frozenset(
-        {"cancel", "cancel action", "cancel correction", "reject", "annulla", "rifiuta"}
+    _UNMARKED_REPLACEMENT = re.compile(
+        r"^\s*(?:for\b.{0,300}?,\s*)?replace\s+.+?\s+with\s+.+",
+        re.IGNORECASE | re.DOTALL,
     )
+    _RECURRING_PERIOD = re.compile(
+        r"\b(?:every\s+(?:day|week|month|year)|each\s+(?:day|week|month|year)|"
+        r"daily|weekly|monthly|annual(?:ly)?|yearly|ogni\s+(?:giorno|settimana|mese|anno)|"
+        r"quotidianamente|settimanalmente|mensilmente|annuale|annualmente)\b",
+        re.IGNORECASE,
+    )
+    _EFFECTIVE_PERIOD_QUESTION = re.compile(
+        r"(?:effective\s+period|which\s+year|what\s+year|periodo\s+di\s+validit|"
+        r"quale\s+anno)",
+        re.IGNORECASE,
+    )
+    _ACTION_CHOICE_QUESTION = re.compile(
+        r"(?:whether|se).{0,120}(?:fix|answer|update|existing knowledge|add|new knowledge|"
+        r"corregg|risposta|aggiorn|conoscenza|aggiung)",
+        re.IGNORECASE | re.DOTALL,
+    )
+    _SCOPE_QUESTION = re.compile(
+        r"(?:scope|ambito|which (?:document|page|source|subject)|quale (?:documento|pagina|fonte))",
+        re.IGNORECASE,
+    )
+    _ACTION_TYPES_BY_COMMAND = {
+        "fix": "fix_answer",
+        "update": "update_knowledge",
+        "add": "add_knowledge",
+    }
+    _CONFIRMATIONS = frozenset({"confirm", "approve", "confermo", "approva"})
+    _CANCELLATIONS = frozenset({"cancel", "annulla"})
 
     def __init__(self, bedrock: BedrockConverseClient) -> None:
         self.bedrock = bedrock
 
     @classmethod
     def looks_like_action(cls, message: str) -> bool:
-        return cls._ACTION_CUES.search(message) is not None
+        return cls.explicit_action_type(message) is not None
+
+    @classmethod
+    def explicit_action_type(cls, message: str) -> str | None:
+        match = cls._ACTION_COMMAND.search(message)
+        if match is None:
+            return None
+        return cls._ACTION_TYPES_BY_COMMAND[match.group("command").casefold()]
 
     looks_like_correction = looks_like_action
 
@@ -221,6 +271,14 @@ class ManagerActionInterpreter:
     def is_cancellation(cls, message: str) -> bool:
         return cls._command(message) in cls._CANCELLATIONS
 
+    @classmethod
+    def is_control_command(cls, message: str) -> bool:
+        return cls._CONTROL_COMMAND.fullmatch(message) is not None
+
+    @classmethod
+    def looks_like_unmarked_action(cls, message: str) -> bool:
+        return "?" not in message and cls._UNMARKED_REPLACEMENT.match(message) is not None
+
     def interpret(
         self,
         context: ManagerActionContext,
@@ -228,10 +286,22 @@ class ManagerActionInterpreter:
         *,
         draft: ManagerActionProposal | None = None,
     ) -> ManagerActionProposal | None:
+        command_action_type = self.explicit_action_type(manager_message)
+        required_action_type = (
+            draft.action_type if draft is not None else command_action_type
+        )
+        if required_action_type is None:
+            return None
+        action_details = self._action_details(
+            manager_message,
+            required_action_type=required_action_type,
+            draft=draft,
+        )
         payload = {
             "previous_interaction": context.to_dict(),
             "existing_draft": self._draft_payload(draft),
-            "manager_message": manager_message,
+            "manager_message": action_details,
+            "required_action_type": required_action_type,
         }
         messages: list[dict[str, Any]] = [
             {
@@ -259,7 +329,22 @@ class ManagerActionInterpreter:
             self._add_usage(usage, turn)
             submissions = self._submissions(turn)
             if len(submissions) == 1:
-                return self._proposal(submissions[0], draft=draft, usage=usage)
+                try:
+                    proposal = self._proposal(
+                        submissions[0],
+                        draft=draft,
+                        usage=usage,
+                        required_action_type=required_action_type,
+                    )
+                    proposal = self._preserve_explicit_knowledge_value(
+                        proposal,
+                        action_details=action_details,
+                        draft=draft,
+                    )
+                    return self._complete_explicit_proposal(proposal, context=context)
+                except ManagerActionError:
+                    if attempt == 1:
+                        break
             if attempt == 0:
                 messages.extend(
                     [
@@ -270,7 +355,170 @@ class ManagerActionInterpreter:
                         },
                     ]
                 )
-        raise ManagerActionError("Manager action interpreter returned no structured proposal.")
+        return self._clarification_proposal(
+            required_action_type,
+            draft=draft,
+            usage=usage,
+        )
+
+    @classmethod
+    def _preserve_explicit_knowledge_value(
+        cls,
+        proposal: ManagerActionProposal,
+        *,
+        action_details: str,
+        draft: ManagerActionProposal | None,
+    ) -> ManagerActionProposal:
+        """Keep an explicit manager value authoritative across LLM structuring."""
+
+        if proposal.action_type not in {"update_knowledge", "add_knowledge"}:
+            return proposal
+
+        manager_input = action_details.strip()
+        if draft is not None and draft.manager_input and manager_input:
+            manager_input = f"{draft.manager_input}\n{manager_input}"
+        elif draft is not None and not manager_input:
+            manager_input = draft.manager_input
+
+        # The structuring model produces the complete merged value used in the
+        # preview. Fall back to the manager's exact text only if the model
+        # omitted it entirely; never overwrite a valid merged proposal with an
+        # incremental instruction.
+        proposal = replace(proposal, manager_input=manager_input)
+        if not proposal.new_value and manager_input:
+            proposal = replace(proposal, new_value=manager_input)
+
+        recurrence = cls._RECURRING_PERIOD.search(proposal.new_value)
+        if recurrence is not None and not proposal.effective_period:
+            proposal = replace(proposal, effective_period=recurrence.group(0))
+
+        clarification_only_requests_period = bool(
+            proposal.clarification_question
+            and cls._EFFECTIVE_PERIOD_QUESTION.search(proposal.clarification_question)
+        )
+        if recurrence is not None and clarification_only_requests_period:
+            proposal = replace(
+                proposal,
+                needs_clarification=False,
+                clarification_question="",
+            )
+        return proposal
+
+    @classmethod
+    def _complete_explicit_proposal(
+        cls,
+        proposal: ManagerActionProposal,
+        *,
+        context: ManagerActionContext,
+    ) -> ManagerActionProposal:
+        """Fill backend-owned context and remove contradictory clarification."""
+
+        scope = proposal.scope.strip()
+        if not scope:
+            wiki_paths = [
+                str(citation.get("wiki_path", "")).strip()
+                for citation in context.citations
+                if isinstance(citation, Mapping)
+            ]
+            scope = ", ".join(dict.fromkeys(path for path in wiki_paths if path))
+
+        previous_value = proposal.previous_value.strip()
+        if proposal.action_type == "update_knowledge" and not previous_value:
+            previous_value = context.answer.strip()
+
+        proposal = replace(
+            proposal,
+            scope=scope,
+            previous_value=previous_value,
+        )
+
+        missing: list[str] = []
+        if not proposal.subject:
+            missing.append("subject")
+        if not proposal.new_value:
+            missing.append("new or corrected fact")
+        if proposal.action_type == "update_knowledge" and not proposal.previous_value:
+            missing.append("current value")
+
+        if missing:
+            return replace(
+                proposal,
+                needs_clarification=True,
+                clarification_question=(
+                    "Please provide the missing factual detail: " + ", ".join(missing) + "."
+                ),
+            )
+
+        question = proposal.clarification_question.strip()
+        backend_owned_question = (
+            not question
+            or cls._ACTION_CHOICE_QUESTION.search(question) is not None
+            or cls._SCOPE_QUESTION.search(question) is not None
+        )
+        if proposal.needs_clarification and backend_owned_question:
+            return replace(
+                proposal,
+                needs_clarification=False,
+                clarification_question="",
+            )
+        return proposal
+
+    @classmethod
+    def _action_details(
+        cls,
+        message: str,
+        *,
+        required_action_type: str,
+        draft: ManagerActionProposal | None,
+    ) -> str:
+        if draft is not None:
+            return message.strip()
+        details = message.strip()
+        while match := cls._ACTION_COMMAND.match(details):
+            if cls._ACTION_TYPES_BY_COMMAND[match.group("command").casefold()] != required_action_type:
+                break
+            details = details[match.end():].lstrip(" :")
+        return details
+
+    @staticmethod
+    def _clarification_proposal(
+        action_type: str,
+        *,
+        draft: ManagerActionProposal | None,
+        usage: Mapping[str, int],
+    ) -> ManagerActionProposal:
+        questions = {
+            "fix_answer": "What should the corrected answer say? A short sentence is enough.",
+            "update_knowledge": (
+                "What single new value should replace the current value, and when does it apply? "
+                "A short sentence is enough."
+            ),
+            "add_knowledge": (
+                "What new fact should be added, and who or what does it apply to? "
+                "A short sentence is enough."
+            ),
+        }
+        if draft is not None:
+            return replace(
+                draft,
+                needs_clarification=True,
+                clarification_question=questions[action_type],
+                usage={str(key): int(value) for key, value in usage.items()},
+            )
+        return ManagerActionProposal(
+            action_id=uuid.uuid4().hex[:12],
+            action_type=action_type,
+            subject="",
+            previous_value="",
+            new_value="",
+            scope="",
+            effective_period="",
+            reason="",
+            needs_clarification=True,
+            clarification_question=questions[action_type],
+            language="other",
+            usage={str(key): int(value) for key, value in usage.items()},
+        )
 
     @staticmethod
     def _draft_payload(draft: ManagerActionProposal | None) -> dict[str, object] | None:
@@ -285,6 +533,7 @@ class ManagerActionInterpreter:
             "scope": draft.scope,
             "effective_period": draft.effective_period,
             "reason": draft.reason,
+            "manager_input": draft.manager_input,
         }
 
     @staticmethod
@@ -305,12 +554,11 @@ class ManagerActionInterpreter:
         *,
         draft: ManagerActionProposal | None,
         usage: Mapping[str, int],
+        required_action_type: str,
     ) -> ManagerActionProposal | None:
         is_action = inputs.get("is_manager_action")
         if not isinstance(is_action, bool):
             raise ManagerActionError("Manager action classification is invalid.")
-        if not is_action:
-            return None
 
         def field(name: str, *, limit: int = 2_000) -> str:
             value = inputs.get(name)
@@ -319,9 +567,7 @@ class ManagerActionInterpreter:
                 candidate = str(getattr(draft, name)).strip()
             return re.sub(r"\s+", " ", candidate)[:limit].strip()
 
-        action_type = inputs.get("action_type")
-        if action_type not in ACTION_TYPES | {"unclear"}:
-            action_type = draft.action_type if draft else "unclear"
+        action_type = required_action_type
         needs_clarification = inputs.get("needs_clarification")
         if not isinstance(needs_clarification, bool):
             raise ManagerActionError("Manager action clarification state is invalid.")
@@ -341,6 +587,7 @@ class ManagerActionInterpreter:
             clarification_question=field("clarification_question", limit=500),
             language=str(language),
             usage={str(key): int(value) for key, value in usage.items()},
+            manager_input=draft.manager_input if draft else "",
             source_path=draft.source_path if draft else None,
             feedback_path=draft.feedback_path if draft else None,
             pages_updated=draft.pages_updated if draft else (),
@@ -351,8 +598,7 @@ class ManagerActionInterpreter:
             proposal = replace(
                 proposal,
                 clarification_question=(
-                    "Please specify whether this fixes the previous answer, updates existing "
-                    "knowledge, or adds new knowledge, and provide the missing details."
+                    "Please provide the missing factual detail needed for this selected action."
                 ),
             )
         return proposal

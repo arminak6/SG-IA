@@ -87,7 +87,7 @@ normalize. At minimum, plan for these conceptual fields:
 Exact endpoint paths and schemas are not yet frozen. Record the decision here
 when they are agreed.
 
-## Current state (2026-08-13)
+## Current state (2026-08-14)
 
 - The project root is initialized as a `main`-branch Git monorepo containing
   the sibling `RAG/` and `WIKI/` implementations. The root README presents the
@@ -231,20 +231,45 @@ when they are agreed.
   enforcement diagnostics.
 - WIKI now routes trusted-manager chat actions into `fix_answer`,
   `update_knowledge`, or `add_knowledge`, always showing a preview and requiring
-  explicit `Confirm`/`Confermo`. Additions create one stable subject source
-  under `raw/manager-knowledge/` and can create Wiki pages. Updates atomically
-  replace that same source, rewrite its existing source summary and canonical
-  pages, and cannot increase the document or Wiki-page count; failed integration
-  restores the prior source. Action history stays in `wiki/log.md`. Answer fixes create no
-  raw knowledge: they must be verified from existing complete Wiki pages, then
-  maintain one connected evidence page and create a non-indexed regression/audit
+  explicit confirmation. New actions begin only with `/fix`, `/update`, or
+  `/add`; all other messages remain normal Q&A, including later questions in
+  the same session. The WIKI UI exposes dedicated action buttons and sends
+  `/confirm` or `/cancel` for pending drafts. Additions create one stable
+  subject source under `raw/manager-knowledge/` and can create Wiki pages.
+  Updates atomically replace that same source, rewrite its existing source
+  summary and canonical pages, and cannot increase the document or Wiki-page
+  count; failed integration restores the prior source. Action history stays in
+  `wiki/log.md`. Answer
+  fixes create no raw knowledge: they must be verified from existing complete
+  Wiki pages, then maintain one connected evidence page and create a non-indexed
+  regression/audit
   record under `backend/feedback/answer-fixes/`. Drafts are in memory and all
   persistent paths remain manager-only POC behavior without authentication.
+  An unsupported confirmed fix now writes nothing and becomes a visibly
+  converted `update_knowledge` proposal requiring a second confirmation. The
+  manager-action interpreter is instructed to preserve only correction facts
+  explicitly supplied by the manager and not infer extra historical claims.
+  The selected UI action is authoritative and cited pages provide update scope
+  automatically. Explicit manager text is retained as audit input; an update
+  previews and persists a complete merged current value rather than replacing
+  the source with an incremental instruction. Recurring periods such as "every
+  year" are confirmation-ready without an additional calendar year. A
+  pre-commit fidelity check rejects derived rewrites that drop approved numeric
+  or percentage details or confirmation conditions, or introduce numeric/date
+  claims absent from all current page sources. A bounded repair turn runs
+  before fail-closed rollback, and grounded answers retain material percentage
+  and confirmation qualifiers. The Sinergia mid-summer manager source and its
+  two Wiki pages were repaired through the confirmed API flow on 2026-08-17;
+  the unsupported calculated 6 July date was removed.
   Approved source knowledge changes must also enter RAG before comparison.
-  Contextual declarative follow-ups are reviewed against the previous answer,
-  so qualifications or added requirements can produce an update preview even
-  without explicit command words. Ambiguous intent and incomplete dates require
-  clarification, and confirmation remains mandatory before any write.
+  Ambiguous or incomplete action details require clarification, and confirmation
+  remains mandatory before any write. Insufficient-knowledge confidence is
+  labeled as abstention confidence in the WIKI UI.
+  While an action form is open, normal chat is disabled so a short human
+  correction cannot accidentally enter Q&A. The form adds and deduplicates the
+  action command automatically, preserves its text after an API failure, and
+  unmarked `replace X with Y` prose receives safe UI guidance instead of a Q&A
+  503. Orphan confirmation after a restart reports that no draft is pending.
 - `test_QA/mateial/ground_truth_qa.json` is the initial shared evaluation fixture: 25
   Italian questions grounded in the WIKI raw corpus, with required answer
   points, source locators, evidence, and two insufficient-knowledge controls.

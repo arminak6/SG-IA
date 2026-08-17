@@ -730,6 +730,200 @@ Knowledge.
 
         self.assertEqual(scripted.calls, [])
 
+    def test_manager_update_validation_preserves_uncertainty_and_confirmation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            backend_root = Path(temp_dir) / "backend"
+            raw_root = backend_root / "raw"
+            manager_root = raw_root / "manager-knowledge"
+            manager_root.mkdir(parents=True)
+            source_path = "raw/manager-knowledge/meeting.md"
+            (manager_root / "meeting.md").write_text(
+                """# Manager Knowledge: Meeting
+
+## Current approved knowledge
+
+The meeting is expected on 13 July with 99% certainty. The company will email
+everyone one week beforehand to confirm the date.
+""",
+                encoding="utf-8",
+            )
+            repository = WikiRepository(backend_root)
+            repository.write_wiki_pages(
+                {
+                    "entities/meeting.md": wiki_page(
+                        title="Meeting",
+                        page_type="entity",
+                        sources=(source_path,),
+                        body="The meeting is held on 13 July.",
+                    )
+                }
+            )
+            agent = WikiAgent(repository, ScriptedBedrock([]))
+            distorted = wiki_page(
+                title="Meeting",
+                page_type="entity",
+                sources=(source_path,),
+                body="The meeting is held on 13 July and an email is sent on 6 July.",
+            )
+
+            with self.assertRaisesRegex(
+                AgentValidationError,
+                "99%|confirmation condition",
+            ):
+                agent._validate_ingestion(
+                    source_path,
+                    source_read=True,
+                    staged={"entities/meeting.md": distorted},
+                    writable_existing_pages=frozenset({"entities/meeting.md"}),
+                )
+
+            calculated_date = wiki_page(
+                title="Meeting",
+                page_type="entity",
+                sources=(source_path,),
+                body=(
+                    "The meeting is expected on 13 July with 99% certainty. "
+                    "The company will confirm the date one week beforehand, on 6 July."
+                ),
+            )
+            with self.assertRaisesRegex(
+                AgentValidationError,
+                "unsupported numeric/date detail.*6",
+            ):
+                agent._validate_ingestion(
+                    source_path,
+                    source_read=True,
+                    staged={"entities/meeting.md": calculated_date},
+                    writable_existing_pages=frozenset({"entities/meeting.md"}),
+                )
+
+    def test_manager_update_repairs_unsupported_calculated_date_before_commit(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            backend_root = Path(temp_dir) / "backend"
+            manager_root = backend_root / "raw" / "manager-knowledge"
+            manager_root.mkdir(parents=True)
+            source_path = "raw/manager-knowledge/meeting.md"
+            (manager_root / "meeting.md").write_text(
+                """# Manager Knowledge: Meeting
+
+## Current approved knowledge
+
+The meeting is expected on 13 July with 99% certainty. The company will email
+everyone one week beforehand to confirm the date.
+""",
+                encoding="utf-8",
+            )
+            repository = WikiRepository(backend_root)
+            original = wiki_page(
+                title="Meeting",
+                page_type="entity",
+                sources=(source_path,),
+                body="The meeting is held on 13 July.",
+            )
+            repository.write_wiki_pages({"entities/meeting.md": original})
+            calculated = wiki_page(
+                title="Meeting",
+                page_type="entity",
+                sources=(source_path,),
+                body=(
+                    "The meeting is expected on 13 July with 99% certainty. "
+                    "The company will confirm the date one week beforehand, on 6 July."
+                ),
+            )
+            repaired = wiki_page(
+                title="Meeting",
+                page_type="entity",
+                sources=(source_path,),
+                body=(
+                    "The meeting is expected on 13 July with 99% certainty. "
+                    "The company will email everyone one week beforehand to confirm the date."
+                ),
+            )
+            scripted = ScriptedBedrock(
+                [
+                    assistant_turn(
+                        {
+                            "toolUse": {
+                                "toolUseId": "read-meeting",
+                                "name": "read_wiki_page",
+                                "input": {"path": "entities/meeting.md"},
+                            }
+                        }
+                    ),
+                    assistant_turn(
+                        {
+                            "toolUse": {
+                                "toolUseId": "write-calculated",
+                                "name": "write_wiki_page",
+                                "input": {"path": "entities/meeting.md", "content": calculated},
+                            }
+                        }
+                    ),
+                    assistant_turn({"text": "Update complete."}),
+                    assistant_turn(
+                        {
+                            "toolUse": {
+                                "toolUseId": "write-repaired",
+                                "name": "write_wiki_page",
+                                "input": {"path": "entities/meeting.md", "content": repaired},
+                            }
+                        }
+                    ),
+                    assistant_turn({"text": "Repaired update complete."}),
+                ]
+            )
+            agent = WikiAgent(repository, scripted, max_steps=8)
+
+            result = agent.update_existing_knowledge(
+                source_path,
+                writable_pages=("entities/meeting.md",),
+            )
+            final_page = repository.read_wiki_page("entities/meeting.md")
+
+        self.assertEqual(result.pages_written, ("entities/meeting.md",))
+        self.assertNotIn("6 July", final_page)
+        self.assertIn("confirm the date", final_page)
+        repair_prompts = [
+            str(block.get("text", ""))
+            for message in scripted.calls[3]["messages"]
+            if isinstance(message, dict) and message.get("role") == "user"
+            for block in message.get("content", [])
+            if isinstance(block, dict) and "text" in block
+        ]
+        self.assertTrue(
+            any("unsupported numeric/date detail" in text for text in repair_prompts)
+        )
+
+    def test_answer_validation_preserves_percentage_and_confirmation_qualifiers(self) -> None:
+        page = wiki_page(
+            title="Meeting",
+            page_type="entity",
+            sources=("raw/meeting.md",),
+            body=(
+                "The meeting is expected on 13 July with 99% certainty. "
+                "The company will email everyone one week beforehand to confirm the date."
+            ),
+        )
+
+        with self.assertRaisesRegex(AgentValidationError, "99%"):
+            WikiAgent._validate_answer_qualifiers(
+                "The meeting is scheduled for 13 July.",
+                [page],
+            )
+        with self.assertRaisesRegex(AgentValidationError, "confirmation condition"):
+            WikiAgent._validate_answer_qualifiers(
+                "The meeting is expected on 13 July with 99% certainty.",
+                [page],
+            )
+
+        WikiAgent._validate_answer_qualifiers(
+            (
+                "The meeting is expected on 13 July with 99% certainty; the company "
+                "will confirm the date by email one week beforehand."
+            ),
+            [page],
+        )
+
     def test_configuration_repr_never_contains_secret(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

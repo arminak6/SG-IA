@@ -165,13 +165,23 @@ index, and manifest changes roll back together if a commit fails.
 
 ## Trusted-manager actions (POC)
 
-The Streamlit chat keeps a random `session_id`. A manager message is classified
-as exactly one of `fix_answer`, `update_knowledge`, or `add_knowledge`. The API
-always returns a structured preview showing the action type, whether source
-knowledge changes, and whether derived Wiki maintenance will occur. Nothing is
-applied until the manager replies `Confirm`/`Confermo`; `Cancel`/`Annulla`
-discards the draft. Ambiguous messages receive a clarification question instead
-of being silently routed.
+The Streamlit chat keeps a random `session_id`. Normal messages are always Q&A,
+including later questions in the same session. A manager action starts only
+through the UI controls or an explicit command: `/fix`, `/update`, or `/add`.
+The API always returns a structured preview showing the action type, whether
+source knowledge changes, and whether derived Wiki maintenance will occur.
+Nothing is applied until the manager chooses **Confirm action** or sends
+`/confirm` (plain `approve` is also accepted); **Cancel action** or `/cancel`
+discards the draft. Incomplete action details are labeled **more information
+required** and receive a clarification question; they are not awaiting approval.
+
+When an action button is selected, the normal Q&A composer is disabled. Enter
+only a short human sentence in **What changed?**; the UI adds `/fix`, `/update`,
+or `/add` automatically and removes a duplicate same-mode prefix. If the API
+fails, the form and its text remain available for retry. Replacement prose sent
+to normal chat is not applied—it receives guidance to use **Update knowledge**.
+After an API restart, an orphan `/confirm` or `/cancel` explains that the draft
+must be previewed again instead of entering Q&A.
 
 - `add_knowledge` creates one stable
   `raw/manager-knowledge/<subject>.md` source, then normal ingestion creates its
@@ -186,18 +196,37 @@ of being silently routed.
   the normal evidence guardrail. The application then adds verified guidance to
   one existing evidence page, preserves provenance, adds graph links to every
   supporting page, refreshes search, and stores a private regression/audit JSON
-  under `backend/feedback/answer-fixes/` that is never indexed as knowledge.
+  under `backend/feedback/answer-fixes/` that is never indexed as knowledge. If
+  existing evidence does not support the correction, the application changes
+  no files and presents a converted `update_knowledge` proposal that requires a
+  second explicit confirmation.
 
 Conversation drafts are process-memory state and disappear when the API
 restarts. Applied manager actions persist.
 
-After a grounded answer, the backend also sends contextual declarative
-follow-ups through the manager-action interpreter even when they omit command
-words such as `update knowledge`. A qualification such as making a date
-tentative or adding a notification requirement can therefore become an
-`update_knowledge` preview. Questions remain normal Q&A. Ambiguous persistence
-intent or incomplete time data produces a clarification request, and nothing is
-written until explicit confirmation.
+The explicit command determines the initial action type; the model cannot
+silently switch it or ask the manager to classify it again. Cited Wiki pages
+and manager sources supply the target scope automatically. Only the
+post-confirmation evidence review may visibly
+convert an unsupported fix into a pending update, and that transition requires
+another confirmation. While a draft is pending, the manager must clarify,
+confirm, or cancel it before returning to Q&A. Nothing is written until the
+confirmation for the currently displayed action.
+
+For `/update`, the text supplied after the command is retained as manager audit
+input while the preview shows one complete merged current value. Still-valid
+knowledge is retained, explicitly corrected facts are replaced, and an
+incremental instruction is never persisted as the whole source snapshot.
+Clarification is reserved for missing or ambiguous facts, not action type or
+internal scope. A recurring statement such as "every year" is a complete
+effective period, so it proceeds directly to preview instead of asking for a
+calendar year. Before commit, update validation rejects derived Wiki rewrites
+that drop critical numeric/percentage details or a stated confirmation
+condition, or introduce a numeric/date claim absent from all of the page's
+current raw sources. The updater gets one bounded opportunity to repair its
+staged pages before rollback. Grounded answers apply the same principle to
+material percentage and confirmation qualifiers attached to the requested
+value.
 
 This is intentionally a trusted-manager POC, not a production authorization
 model. There is no login, role check, approval queue, rollback UI, or named

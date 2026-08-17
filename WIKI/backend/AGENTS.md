@@ -79,7 +79,10 @@ Rules:
    guidance to an existing Wiki page only after a separate verifier establishes
    that the corrected answer is fully supported by existing complete Wiki pages.
    This is maintenance of the derived graph, not new source knowledge. Preserve
-   all provenance and link the maintained page to every supporting page.
+   all provenance and link the maintained page to every supporting page. If the
+   evidence does not support the correction, convert it visibly into a pending
+   `update_knowledge` proposal without writing anything and require a fresh
+   confirmation before changing source knowledge.
 
 ## Ingestion workflow
 
@@ -116,10 +119,29 @@ because it was read; it must be integrated into the persistent wiki.
 9. The post-answer evidence verifier is advisory in the POC by default. Its
    score and warning reasons remain observable; only
    `LLM_WIKI_ANSWER_GUARDRAIL_ENABLED=true` permits it to replace an answer.
-10. A declarative manager follow-up may qualify or extend the preceding fact
-    without explicit action words. Classify it in the previous-interaction
-    context, show a preview, clarify ambiguous persistence intent or incomplete
-    dates, and never write knowledge before explicit confirmation.
+10. Normal chat messages, including contextual or declarative follow-ups, are
+    always Q&A. Enter manager maintenance only when the message begins with the
+    explicit `/fix`, `/update`, or `/add` command. Show a preview, clarify
+    incomplete details, and never write knowledge before explicit confirmation.
+    Accept concise human details after the command and reuse unambiguous subject,
+    previous-value, scope, and date context from the preceding interaction.
+    For `update_knowledge` and `add_knowledge`, preserve the manager's explicit
+    text after the command as audit input. For an update, present one complete
+    merged current value that retains still-valid knowledge and applies only
+    the facts the manager supplied; do not persist the incremental instruction
+    as a replacement snapshot. Preserve uncertainty, future intent, relative
+    timing, and confirmation conditions without calculating a more specific
+    calendar date. Recurring periods such as "every year" or "ogni anno" are
+    complete and must not trigger a request for a calendar year. The selected
+    UI action and cited Wiki/source scope are application-owned context and must
+    never be requested again from the manager.
+    Unmarked imperative replacement prose must receive manager-form guidance,
+    not be inferred as an action or passed into grounded Q&A.
+11. Preserve material qualifiers attached to the requested fact. An expected,
+    probabilistic, provisional, or later-confirmed date/value must not become an
+    unconditional answer. If a manager update rewrite introduces a numeric or
+    date detail absent from every current raw source, reject it and request a
+    bounded staged-page repair before commit.
 
 ## Maintenance checks
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Mapping, Sequence
@@ -11,6 +12,10 @@ import requests
 
 
 DEFAULT_API_URL = "http://127.0.0.1:8000"
+MANAGER_ACTION_MODES = frozenset({"fix", "update", "add"})
+MANAGER_ACTION_PREFIX = re.compile(
+    r"^\s*/(?P<mode>fix|update|add)(?=\s|$)\s*", re.IGNORECASE
+)
 
 
 class WikiApiError(RuntimeError):
@@ -19,6 +24,26 @@ class WikiApiError(RuntimeError):
 
 class WikiApiUnavailable(WikiApiError):
     """Raised when the backend cannot be reached."""
+
+
+def build_manager_action_command(mode: str, details: str) -> str:
+    """Build one explicit action command from short manager-form text."""
+
+    normalized_mode = str(mode).strip().casefold()
+    if normalized_mode not in MANAGER_ACTION_MODES:
+        raise ValueError("Unknown manager action mode.")
+
+    normalized_details = str(details).strip()
+    while match := MANAGER_ACTION_PREFIX.match(normalized_details):
+        supplied_mode = match.group("mode").casefold()
+        if supplied_mode != normalized_mode:
+            raise ValueError(
+                f"This is {normalized_mode} mode; remove the /{supplied_mode} prefix."
+            )
+        normalized_details = normalized_details[match.end():].strip()
+    if not normalized_details:
+        raise ValueError("Enter the manager action details before previewing.")
+    return f"/{normalized_mode} {normalized_details}"
 
 
 @dataclass(frozen=True)
@@ -92,6 +117,8 @@ class ChatResponse:
     answer: str
     citations: tuple[str, ...]
     confidence_score: float | None = None
+    status: str = "answered"
+    manager_action: dict[str, Any] | None = None
 
 
 class WikiApiClient:
@@ -215,10 +242,20 @@ class WikiApiClient:
             confidence_score = float(raw_confidence)
             if not 0 <= confidence_score <= 10:
                 raise WikiApiError("The backend returned an invalid confidence score.")
+        raw_status = payload.get("status", "answered")
+        if not isinstance(raw_status, str) or not raw_status.strip():
+            raise WikiApiError("The backend returned an invalid chat status.")
+        raw_manager_action = payload.get("manager_action")
+        if raw_manager_action is not None and not isinstance(raw_manager_action, Mapping):
+            raise WikiApiError("The backend returned an invalid manager action.")
         return ChatResponse(
             answer=payload["answer"],
             citations=citations,
             confidence_score=confidence_score,
+            status=raw_status.strip(),
+            manager_action=(
+                dict(raw_manager_action) if isinstance(raw_manager_action, Mapping) else None
+            ),
         )
 
     def _request(

@@ -3,7 +3,12 @@ from unittest.mock import Mock
 
 import requests
 
-from frontend.api_client import WikiApiClient, WikiApiError, WikiApiUnavailable
+from frontend.api_client import (
+    WikiApiClient,
+    WikiApiError,
+    WikiApiUnavailable,
+    build_manager_action_command,
+)
 
 
 def response(payload, *, status_code=200):
@@ -40,6 +45,24 @@ class WikiApiClientTests(unittest.TestCase):
         self.assertTrue(documents[0].is_ingested)
         self.assertEqual(documents[0].size_bytes, 42)
 
+    def test_manager_form_builds_one_command_from_short_human_text(self) -> None:
+        self.assertEqual(
+            build_manager_action_command("update", "It is now 24 February 2027."),
+            "/update It is now 24 February 2027.",
+        )
+        self.assertEqual(
+            build_manager_action_command(
+                "update", "/update /update It is now 24 February 2027."
+            ),
+            "/update It is now 24 February 2027.",
+        )
+
+    def test_manager_form_rejects_mismatched_or_empty_commands(self) -> None:
+        with self.assertRaises(ValueError):
+            build_manager_action_command("update", "/add A new fact.")
+        with self.assertRaises(ValueError):
+            build_manager_action_command("fix", "/fix")
+
     def test_update_sends_selected_paths_and_parses_per_file_results(self) -> None:
         self.session.request.return_value = response(
             {
@@ -67,6 +90,8 @@ class WikiApiClientTests(unittest.TestCase):
                     {"wiki_path": "wiki/topic.md", "source_paths": ["raw/a.txt"]}
                 ],
                 "confidence_score": 8.7,
+                "status": "answered",
+                "manager_action": None,
             }
         )
 
@@ -78,6 +103,8 @@ class WikiApiClientTests(unittest.TestCase):
             ("wiki/topic.md (sources: raw/a.txt)",),
         )
         self.assertEqual(result.confidence_score, 8.7)
+        self.assertEqual(result.status, "answered")
+        self.assertIsNone(result.manager_action)
         _, _, kwargs = self.session.request.mock_calls[0]
         self.assertEqual(
             kwargs["json"],
@@ -92,6 +119,25 @@ class WikiApiClientTests(unittest.TestCase):
 
         with self.assertRaises(WikiApiError):
             self.client.chat("What is it?")
+
+    def test_chat_preserves_manager_action_state(self) -> None:
+        self.session.request.return_value = response(
+            {
+                "answer": "Preview the action, then confirm.",
+                "citations": [],
+                "confidence_score": None,
+                "status": "manager_action_proposed",
+                "manager_action": {
+                    "state": "proposed",
+                    "action_type": "update_knowledge",
+                },
+            }
+        )
+
+        result = self.client.chat("/update Replace the old value.")
+
+        self.assertEqual(result.status, "manager_action_proposed")
+        self.assertEqual(result.manager_action["state"], "proposed")
 
     def test_connection_failure_has_a_clear_error(self) -> None:
         self.session.request.side_effect = requests.ConnectionError("offline")

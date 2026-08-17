@@ -124,6 +124,8 @@ class ChatCorrectionResponse(ApiModel):
     subject: str
     previous_value: str
     corrected_value: str
+    proposed_knowledge: str = ""
+    manager_input: str = ""
     scope: str
     effective_period: str
     source_path: Optional[str] = None

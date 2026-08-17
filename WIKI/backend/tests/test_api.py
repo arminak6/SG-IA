@@ -238,6 +238,8 @@ class ApiTests(unittest.TestCase):
                         "subject": "Holiday start",
                         "previous_value": "28 December",
                         "corrected_value": "27 December",
+                        "proposed_knowledge": "The holiday starts on 27 December.",
+                        "manager_input": "It starts on 27 December.",
                         "scope": "Company holiday",
                         "effective_period": "2026",
                         "source_path": None,
@@ -257,6 +259,10 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(
             response.json()["manager_action"]["corrected_value"],
             "27 December",
+        )
+        self.assertEqual(
+            response.json()["manager_action"]["proposed_knowledge"],
+            "The holiday starts on 27 December.",
         )
         self.assertFalse(response.json()["manager_action"]["changes_knowledge"])
         self.assertEqual(self.service.questions, [])

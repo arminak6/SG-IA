@@ -237,6 +237,46 @@ logic.
 - Docling uses a persistent Docker model-cache volume. The stack passed local
   API/UI health checks while the RAG stack remained available on its ports.
 
+### 2026-08-14: explicit manager-action routing
+
+- Normal chat messages now always use Q&A, including new questions after a
+  previous answer. Manager maintenance begins only through `/fix`, `/update`,
+  or `/add`, and the selected action type is enforced deterministically.
+- The Streamlit UI provides separate manager-action controls plus explicit
+  preview, clarification, confirmation, and cancellation states. Confidence on
+  an insufficient-knowledge response is labeled as abstention confidence.
+- Action mode now disables the normal Q&A composer, accepts a short human
+  sentence, automatically adds/deduplicates the action prefix, and preserves
+  form text after API failure. Unmarked replacement prose returns manager-form
+  guidance rather than a Q&A error; confirmation without an in-memory draft
+  returns a specific restart/re-preview message.
+- Ready drafts require one confirmation. Plain `approve`/`approva` are exact
+  confirmation aliases; incomplete drafts are instead labeled as requiring
+  more information and remain non-writable until clarification is complete.
+- Generic regression coverage validates short Update/Fix/Add inputs and uses a
+  temporary repository for Add cleanup. A live current-corpus smoke test
+  confirmed that a short manager update changed the stable source and derived
+  page, after which the same question returned the new cited value.
+
+### 2026-08-17: manager-update merge and fidelity safeguards
+
+- The selected Update/Fix/Add control is authoritative. The structuring model
+  cannot reclassify it or ask the manager to choose the action again, and cited
+  Wiki pages provide internal update scope automatically.
+- Updates retain the manager's exact sentence as audit input but preview and
+  persist one complete merged current value. Incremental wording no longer
+  replaces the entire stable manager source.
+- Clarification is limited to genuinely missing or ambiguous factual details.
+  A pre-commit fidelity check rejects derived Wiki rewrites that lose approved
+  numeric/percentage details or confirmation conditions, or introduce numeric
+  dates absent from all current page sources. The agent receives a bounded
+  repair turn before fail-closed rollback. Grounded answers must retain
+  percentage and confirmation qualifiers attached to the requested value.
+- The affected Sinergia mid-summer source and its two existing Wiki pages were
+  repaired through the confirmed API workflow. They now state that 13 July is
+  expected with 99% certainty and that Sinergia will confirm the date by email
+  one week beforehand; the unsupported calculated 6 July date was removed.
+
 ## Data rules
 
 - Use the same agreed subset of `../material/` as the RAG implementation.
