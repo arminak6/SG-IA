@@ -27,6 +27,17 @@ class AgentValidationError(AgentError):
     """Raised when a model claims completion without satisfying invariants."""
 
 
+def _normalize_wiki_local_links(content: str) -> str:
+    """Convert model-emitted root-style Wiki links to valid sibling links."""
+
+    return re.sub(
+        r"\]\(/(concepts|entities|sources|syntheses)/",
+        r"](../\1/",
+        content,
+        flags=re.IGNORECASE,
+    )
+
+
 INGESTION_PATTERN = re.compile(r"^Ingest (raw/[^\r\n]+) into the wiki\.$")
 
 
@@ -182,6 +193,19 @@ WRITE_WIKI_TOOL = _tool(
         "additionalProperties": False,
     },
 )
+DELETE_WIKI_TOOL = _tool(
+    "delete_wiki_page",
+    "Stage deletion of an obsolete existing page owned only by the current manager source.",
+    {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string"},
+            "reason": {"type": "string", "minLength": 10, "maxLength": 500},
+        },
+        "required": ["path", "reason"],
+        "additionalProperties": False,
+    },
+)
 SUBMIT_ANSWER_TOOL = _tool(
     "submit_answer",
     "Submit the final grounded answer and its validated wiki/raw citations.",
@@ -303,7 +327,12 @@ calendar date from relative timing unless the source explicitly states it. A
 number or date that appears only in the old Wiki prose but not in any current
 raw source is obsolete derived content and must be removed. Do not write
 index.md or log.md; the application maintains
-them deterministically. Once the first page write succeeds, discovery is
+them deterministically. If an existing page has become wholly obsolete (for
+example, an entity was replaced) and it is owned only by this manager source,
+read it and call delete_wiki_page. Never retain a stale entity merely because
+its filename is no longer suitable, and never repurpose a misleading old path.
+Page creation remains forbidden during updates. Once the first page write or
+deletion succeeds, discovery is
 closed. When all necessary writes have succeeded, make no more tool calls and
 finish with a short summary.
 """.strip()
@@ -331,6 +360,10 @@ Preserve material qualifiers attached to the requested fact. If the evidence
 says a date or value is expected, probabilistic, provisional, or subject to a
 later confirmation, include that condition in the answer; never simplify it
 into an unconditional scheduled or fixed fact.
+Never calculate a derived date or time. Never add AM/PM, a timezone, "local
+time", or another temporal interpretation unless a cited page explicitly
+states it. Do not write a Sources section in the answer text; citations are
+submitted only through the structured citations field.
 If the wiki cannot support an answer, submit status `insufficient_knowledge` and
 say what is missing. Never answer only as free text.
 """.strip()
@@ -410,11 +443,114 @@ class WikiAgent:
         """Run one exact, source-scoped ingestion instruction that may create pages."""
 
         source_path = parse_ingestion_prompt(instruction)
+        if source_path.casefold().startswith("raw/manager-knowledge/"):
+            return self._ingest_manager_source(source_path, instruction=instruction)
         return self._integrate_source(
             source_path,
             instruction=instruction,
             operation_prompt=INGEST_PROMPT,
             writable_existing_pages=None,
+        )
+
+    def _ingest_manager_source(
+        self,
+        source_path: str,
+        *,
+        instruction: str,
+    ) -> IngestionResult:
+        """Materialize trusted manager additions verbatim without generative drift."""
+
+        source_path = self.repository.normalize_source_path(source_path)
+        if not self.repository.raw_exists(source_path):
+            raise AgentValidationError(f"Raw source does not exist: {source_path}")
+        if self.repository.is_ingested(source_path):
+            return IngestionResult(
+                source_path=source_path,
+                prompt=instruction,
+                pages_written=(),
+                message="Source was already represented by exact wiki provenance.",
+                usage={},
+            )
+
+        raw_content = self.repository.read_raw(source_path)
+        subject_match = re.search(
+            r"^#\s+Manager Knowledge:\s*(.+?)\s*$",
+            raw_content,
+            flags=re.MULTILINE | re.IGNORECASE,
+        )
+        marker = "## Current approved knowledge"
+        if subject_match is None or marker not in raw_content:
+            raise AgentValidationError(
+                "Manager knowledge source is missing its subject or current approved knowledge."
+            )
+        subject = subject_match.group(1).strip()
+        approved = raw_content.split(marker, 1)[1].strip()
+        if not approved:
+            raise AgentValidationError("Manager knowledge has no approved value to ingest.")
+        updated_match = re.search(r"^- Updated at:\s*(\d{4}-\d{2}-\d{2})", raw_content, re.MULTILINE)
+        updated = updated_match.group(1) if updated_match else "1970-01-01"
+        slug = source_path.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+        quoted_title = json.dumps(subject, ensure_ascii=False)
+        source_page = f"""---
+title: {quoted_title}
+page_type: source
+updated: {updated}
+sources:
+  - {source_path}
+---
+
+# {subject}
+
+{approved}
+
+## Sources
+
+- {source_path}
+"""
+        entity_page = f"""---
+title: {quoted_title}
+page_type: entity
+updated: {updated}
+sources:
+  - {source_path}
+---
+
+# {subject}
+
+{approved}
+
+## Sources
+
+- {source_path}
+- [Source summary](../sources/{slug}.md)
+"""
+        pages: dict[str, str] = {f"sources/{slug}.md": source_page}
+        entity_path = f"entities/{slug}.md"
+        existing_pages = {page.path for page in self.repository.list_wiki_pages()}
+        if entity_path not in existing_pages:
+            pages[entity_path] = entity_page
+        pages_written = tuple(self.repository.commit_ingestion(source_path, pages))
+        index_message = ""
+        if self.searcher is not None and self.searcher.enabled:
+            try:
+                refresh = self.searcher.refresh()
+                index_message = (
+                    f" Semantic section index refreshed: {refresh.sections_embedded} changed "
+                    f"section(s) embedded across {refresh.pages_embedded} page(s), "
+                    f"{refresh.sections_cached} unchanged section(s) reused."
+                )
+            except (EmbeddingError, RepositoryError, WikiSearchError, OSError, ValueError) as exc:
+                logger.warning(
+                    "Semantic index refresh deferred after manager ingestion (%s).",
+                    type(exc).__name__,
+                )
+                index_message = " Semantic index refresh was deferred; lexical search remains available."
+        return IngestionResult(
+            source_path=source_path,
+            prompt=instruction,
+            pages_written=pages_written,
+            message="Materialized manager-approved knowledge verbatim." + index_message,
+            usage={},
         )
 
     def update_existing_knowledge(
@@ -508,6 +644,7 @@ class WikiAgent:
             }
         ]
         staged: dict[str, str] = {}
+        deleted: set[str] = set()
         pages_read: set[str] = set()
         source_read = True
         usage: dict[str, int] = {}
@@ -561,17 +698,52 @@ class WikiAgent:
                 content = inputs.get("content")
                 if not isinstance(content, str):
                     raise AgentValidationError("Wiki page content must be text.")
+                content = _normalize_wiki_local_links(content)
                 # Validate early so the model can repair a malformed page.
                 staged[path] = self.repository._validate_markdown(content, page_path=path)
+                deleted.discard(path)
                 return {"path": path, "staged": True, "size_bytes": len(staged[path].encode("utf-8"))}
+            if name == "delete_wiki_page":
+                if writable_existing_pages is None:
+                    raise AgentValidationError("Normal ingestion cannot delete Wiki pages.")
+                path = self.repository.normalize_wiki_path(
+                    str(inputs.get("path", "")), allow_system=False
+                )
+                if path not in writable_existing_pages:
+                    raise AgentValidationError(
+                        f"Manager updates may delete only source-owned existing pages; {path} "
+                        "is outside the approved ownership set."
+                    )
+                if path not in pages_read:
+                    raise AgentValidationError(
+                        f"Read the complete existing page before deleting it: {path}"
+                    )
+                current = self.repository.read_wiki_page(path, overlays=staged)
+                page_sources = set(
+                    self.repository.page_source_paths(path, content=current)
+                )
+                if page_sources != {source_path}:
+                    raise AgentValidationError(
+                        f"Page {path} is shared and cannot be deleted by this source update."
+                    )
+                reason = str(inputs.get("reason", "")).strip()
+                if len(reason) < 10:
+                    raise AgentValidationError("Page deletion requires a specific reason.")
+                staged.pop(path, None)
+                deleted.add(path)
+                return {"path": path, "staged_for_deletion": True}
             raise AgentValidationError(f"Unknown ingestion tool: {name}")
 
         discovery_round_limit = max(2, self.max_steps // 2)
         for step_index in range(self.max_steps):
-            if staged or step_index >= discovery_round_limit:
+            if staged or deleted or step_index >= discovery_round_limit:
                 tools = [WRITE_WIKI_TOOL]
+                if writable_existing_pages is not None:
+                    tools.append(DELETE_WIKI_TOOL)
             else:
                 tools = [LIST_WIKI_TOOL, READ_WIKI_TOOL, SEARCH_WIKI_TOOL, WRITE_WIKI_TOOL]
+                if writable_existing_pages is not None:
+                    tools.append(DELETE_WIKI_TOOL)
             turn = self.bedrock.converse(
                 messages=messages,
                 system_prompt=self._system_prompt(operation_prompt),
@@ -595,6 +767,7 @@ class WikiAgent:
                                 source_path,
                                 source_read=source_read,
                                 staged=staged,
+                                deleted=deleted,
                                 writable_existing_pages=writable_existing_pages,
                                 usage=usage,
                                 exact_approved_text=exact_approved_text,
@@ -640,6 +813,7 @@ class WikiAgent:
                     source_path,
                     source_read=source_read,
                     staged=staged,
+                    deleted=deleted,
                     writable_existing_pages=writable_existing_pages,
                     usage=usage,
                     exact_approved_text=exact_approved_text,
@@ -669,11 +843,21 @@ class WikiAgent:
             source_path,
             source_read=source_read,
             staged=staged,
+            deleted=deleted,
             writable_existing_pages=writable_existing_pages,
             usage=usage,
             exact_approved_text=exact_approved_text,
         )
-        pages_written = tuple(self.repository.commit_ingestion(source_path, staged))
+        if writable_existing_pages is not None:
+            pages_written = tuple(
+                self.repository.commit_manager_update(
+                    source_path,
+                    staged,
+                    deleted_pages=deleted,
+                )
+            )
+        else:
+            pages_written = tuple(self.repository.commit_ingestion(source_path, staged))
         index_message = ""
         if self.searcher is not None and self.searcher.enabled:
             try:
@@ -711,13 +895,14 @@ class WikiAgent:
         *,
         source_read: bool,
         staged: Mapping[str, str],
+        deleted: set[str] | frozenset[str] = frozenset(),
         writable_existing_pages: frozenset[str] | None = None,
         usage: dict[str, int] | None = None,
         exact_approved_text: str | None = None,
     ) -> None:
         if not source_read:
             raise AgentValidationError("Ingestion ended without reading the raw source.")
-        if not staged:
+        if not staged and not deleted:
             raise AgentValidationError("Ingestion ended without staging a knowledge page.")
         if writable_existing_pages is not None:
             disallowed = sorted(set(staged) - writable_existing_pages, key=str.casefold)
@@ -726,13 +911,41 @@ class WikiAgent:
                     "Manager updates cannot create or rewrite unapproved Wiki pages: "
                     + ", ".join(disallowed)
                 )
+            disallowed_deletions = sorted(
+                set(deleted) - writable_existing_pages,
+                key=str.casefold,
+            )
+            if disallowed_deletions:
+                raise AgentValidationError(
+                    "Manager updates cannot delete unapproved Wiki pages: "
+                    + ", ".join(disallowed_deletions)
+                )
             self._validate_manager_update_fidelity(source_path, staged)
             self._validate_exact_manager_wording(exact_approved_text, staged)
             self._validate_manager_update_semantics(source_path, staged, usage=usage)
-        elif not any(page_path.casefold().startswith("sources/") for page_path in staged):
-            raise AgentValidationError(
-                "Ingestion ended without staging the mandatory source-summary page."
-            )
+        else:
+            if source_path.casefold().startswith("raw/manager-knowledge/"):
+                subject_slug = source_path.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+                source_summary = f"sources/{subject_slug}.md"
+                canonical_pages = {
+                    f"entities/{subject_slug}.md",
+                    f"concepts/{subject_slug}.md",
+                    f"syntheses/{subject_slug}.md",
+                }
+                permitted = canonical_pages | {source_summary}
+                disallowed = sorted(set(staged) - permitted, key=str.casefold)
+                selected_canonical = sorted(set(staged) & canonical_pages)
+                if disallowed or len(selected_canonical) > 1:
+                    detail = disallowed or selected_canonical
+                    raise AgentValidationError(
+                        "Manager additions may maintain only their stable source-summary "
+                        "page and one canonical subject page: " + ", ".join(detail)
+                    )
+            self._validate_manager_update_semantics(source_path, staged, usage=usage)
+            if not any(page_path.casefold().startswith("sources/") for page_path in staged):
+                raise AgentValidationError(
+                    "Ingestion ended without staging the mandatory source-summary page."
+                )
         pages_without_provenance = [
             page_path
             for page_path, content in staged.items()
@@ -822,7 +1035,7 @@ class WikiAgent:
         *,
         usage: dict[str, int] | None,
     ) -> None:
-        """Use an independent entailment review before committing manager-derived pages."""
+        """Use independent entailment review before committing manager-derived pages."""
 
         if not source_path.casefold().startswith("raw/manager-knowledge/"):
             return
@@ -970,6 +1183,39 @@ class WikiAgent:
 
         evidence = "\n".join(relevant_paragraphs).casefold()
         answer_folded = answer.casefold()
+        evidence_times = set(
+            re.findall(r"(?<!\d)(?:[01]?\d|2[0-3]):[0-5]\d(?!\d)", evidence)
+        )
+        answer_times = set(
+            re.findall(r"(?<!\d)(?:[01]?\d|2[0-3]):[0-5]\d(?!\d)", answer_folded)
+        )
+        unsupported_times = sorted(answer_times - evidence_times)
+        if unsupported_times:
+            raise AgentValidationError(
+                "The answer introduced a calculated or unsupported time: "
+                + ", ".join(unsupported_times)
+            )
+
+        meridiem_pattern = r"(?<!\w)(?:a\.?m\.?|p\.?m\.?)(?!\w)"
+        if re.search(meridiem_pattern, answer_folded) and not re.search(
+            meridiem_pattern, evidence
+        ):
+            raise AgentValidationError(
+                "The answer introduced AM/PM even though the cited evidence does not specify it."
+            )
+
+        timezone_patterns = (
+            r"\blocal\s+time\b",
+            r"\b(?:utc|gmt|cet|cest)\b",
+            r"\b(?:time\s+zone|timezone)\b",
+        )
+        if any(
+            re.search(pattern, answer_folded) and not re.search(pattern, evidence)
+            for pattern in timezone_patterns
+        ):
+            raise AgentValidationError(
+                "The answer introduced a timezone or local-time qualifier absent from evidence."
+            )
         evidence_percentages = {
             marker for marker in cls._numeric_markers(evidence) if marker.endswith("%")
         }
@@ -995,7 +1241,7 @@ class WikiAgent:
             ),
             (
                 "confirmation time unit",
-                ("day", "week", "month", "giorn", "settiman", "mes"),
+                ("hour", "day", "week", "month", " ora", " ore", "giorn", "settiman", "mes"),
             ),
             (
                 "confirmation communication method",
@@ -1025,6 +1271,16 @@ class WikiAgent:
                     "The answer omitted material confirmation qualifier(s): "
                     + ", ".join(missing_groups)
                 )
+
+    @staticmethod
+    def _strip_answer_sources(answer: str) -> str:
+        """Remove model-authored source lists; structured citations are authoritative."""
+
+        marker = re.search(
+            r"(?im)^\s*(?:#{1,6}\s+Sources|\*\*Sources\*\*)\s*$",
+            answer,
+        )
+        return answer[: marker.start()].rstrip() if marker else answer.strip()
 
     def answer(self, question: str) -> AnswerResult:
         question = question.strip()
@@ -1077,6 +1333,7 @@ class WikiAgent:
                 raise AgentValidationError("Answer status is invalid.")
             if not isinstance(answer, str) or not answer.strip() or len(answer) > 20_000:
                 raise AgentValidationError("Answer text is empty or too long.")
+            answer = self._strip_answer_sources(answer)
             if not isinstance(raw_citations, list):
                 raise AgentValidationError("Citations must be a list.")
 

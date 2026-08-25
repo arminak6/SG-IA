@@ -12,6 +12,8 @@ from backend.app.agent import (
     Citation,
     IngestionResult,
     WikiAgent,
+    _normalize_wiki_local_links,
+    build_ingestion_prompt,
 )
 from backend.app.bedrock import BedrockConverseClient, BedrockError, ConverseTurn
 from backend.app.config import BedrockSettings, load_settings
@@ -128,6 +130,48 @@ sources:
 
 
 class CoreTests(unittest.TestCase):
+    def test_manager_addition_is_materialized_verbatim_without_model_generation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            backend_root = Path(temp_dir) / "backend"
+            manager_root = backend_root / "raw" / "manager-knowledge"
+            manager_root.mkdir(parents=True)
+            source_path = "raw/manager-knowledge/archive-review.md"
+            approved = (
+                "Archive review occurs in room Blue-7 at 16:05 every Friday. "
+                "Records emails all archivists one day before to confirm it."
+            )
+            (manager_root / "archive-review.md").write_text(
+                "# Manager Knowledge: Archive review\n\n"
+                "- Updated at: 2026-08-17T12:00:00Z\n\n"
+                "## Current approved knowledge\n\n"
+                f"{approved}\n",
+                encoding="utf-8",
+            )
+            repository = WikiRepository(backend_root)
+            scripted = ScriptedBedrock([])
+
+            result = WikiAgent(repository, scripted).ingest(
+                build_ingestion_prompt(source_path)
+            )
+
+            self.assertEqual(scripted.calls, [])
+            self.assertEqual(
+                set(result.pages_written),
+                {"entities/archive-review.md", "sources/archive-review.md"},
+            )
+            for page_path in result.pages_written:
+                claim_body = repository.read_wiki_page(page_path).split("## Sources", 1)[0]
+                self.assertIn(approved, claim_body)
+                self.assertNotIn("managed", claim_body.casefold())
+
+    def test_root_style_wiki_links_are_normalized_to_sibling_links(self) -> None:
+        content = "See [source](/sources/review.md) and [entity](/entities/team.md)."
+
+        self.assertEqual(
+            _normalize_wiki_local_links(content),
+            "See [source](../sources/review.md) and [entity](../entities/team.md).",
+        )
+
     def test_answer_retries_the_complete_read_only_operation_after_bedrock_failure(self) -> None:
         class FlakyAnswerAgent:
             def __init__(self):
@@ -1038,6 +1082,57 @@ The company will email everyone one week beforehand to confirm the date.
             str(scripted.calls[4]["messages"]),
         )
 
+    def test_manager_add_semantic_review_rejects_unsupported_duties(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            backend_root = Path(temp_dir) / "backend"
+            manager_root = backend_root / "raw" / "manager-knowledge"
+            manager_root.mkdir(parents=True)
+            source_path = "raw/manager-knowledge/review.md"
+            (manager_root / "review.md").write_text(
+                "Records emails archivists to confirm the room and time.",
+                encoding="utf-8",
+            )
+            repository = WikiRepository(backend_root)
+            staged = {
+                "entities/review.md": wiki_page(
+                    title="Review",
+                    page_type="entity",
+                    sources=(source_path,),
+                    body=(
+                        "Records emails archivists to confirm the room and time. "
+                        "Archivists must acknowledge receipt and attendance."
+                    ),
+                ),
+                "sources/review.md": wiki_page(
+                    title="Review source",
+                    page_type="source",
+                    sources=(source_path,),
+                    body="Records emails archivists to confirm the room and time.",
+                ),
+            }
+            scripted = ScriptedBedrock(
+                [
+                    wiki_update_review_turn(
+                        valid=False,
+                        unsupported_claims=(
+                            "Archivists must acknowledge receipt and attendance.",
+                        ),
+                    )
+                ]
+            )
+            agent = WikiAgent(repository, scripted)
+
+            with self.assertRaisesRegex(
+                AgentValidationError,
+                "unsupported claim",
+            ):
+                agent._validate_ingestion(
+                    source_path,
+                    source_read=True,
+                    staged=staged,
+                    usage={},
+                )
+
     def test_answer_validation_preserves_percentage_and_confirmation_qualifiers(self) -> None:
         page = wiki_page(
             title="Meeting",
@@ -1075,6 +1170,89 @@ The company will email everyone one week beforehand to confirm the date.
             ),
             [page],
         )
+
+    def test_answer_validation_rejects_calculated_time_and_timezone_additions(self) -> None:
+        page = wiki_page(
+            title="Inspection",
+            page_type="entity",
+            sources=("raw/inspection.md",),
+            body=(
+                "The inspection begins at 15:45 every Wednesday. "
+                "Quality calls inspectors four hours beforehand to confirm the time."
+            ),
+        )
+
+        with self.assertRaisesRegex(AgentValidationError, "unsupported time"):
+            WikiAgent._validate_answer_qualifiers(
+                "The inspection is at 15:45; confirmation occurs at 11:45 PM.",
+                [page],
+            )
+        with self.assertRaisesRegex(AgentValidationError, "local-time qualifier"):
+            WikiAgent._validate_answer_qualifiers(
+                (
+                    "The inspection begins at 15:45 local time every Wednesday; "
+                    "Quality calls inspectors four hours beforehand to confirm it."
+                ),
+                [page],
+            )
+
+    def test_model_authored_sources_section_is_removed_from_answer_text(self) -> None:
+        answer = "Grounded answer.\n\n## Sources\n- entities/example.md"
+        self.assertEqual(WikiAgent._strip_answer_sources(answer), "Grounded answer.")
+
+    def test_manager_update_can_atomically_delete_an_obsolete_owned_page(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            backend_root = Path(temp_dir) / "backend"
+            manager_root = backend_root / "raw" / "manager-knowledge"
+            manager_root.mkdir(parents=True)
+            source_path = "raw/manager-knowledge/review.md"
+            (manager_root / "review.md").write_text(
+                "The review is held in room Green-4.", encoding="utf-8"
+            )
+            repository = WikiRepository(backend_root)
+            old_page = wiki_page(
+                title="Room Blue-7",
+                page_type="entity",
+                sources=(source_path,),
+                body="Room Blue-7 hosts the review.",
+            )
+            canonical = wiki_page(
+                title="Review",
+                page_type="entity",
+                sources=(source_path,),
+                body="The review is held in room Blue-7.",
+            )
+            repository.commit_ingestion(
+                source_path,
+                {
+                    "entities/review.md": canonical,
+                    "entities/room-blue-7.md": old_page,
+                },
+            )
+            updated = wiki_page(
+                title="Review",
+                page_type="entity",
+                sources=(source_path,),
+                body="The review is held in room Green-4.",
+            )
+
+            changed = repository.commit_manager_update(
+                source_path,
+                {"entities/review.md": updated},
+                deleted_pages=("entities/room-blue-7.md",),
+            )
+
+            self.assertEqual(
+                changed,
+                ["entities/review.md", "entities/room-blue-7.md"],
+            )
+            self.assertFalse(
+                (backend_root / "wiki" / "entities" / "room-blue-7.md").exists()
+            )
+            self.assertEqual(
+                repository.source_manifest_pages(source_path),
+                ("entities/review.md",),
+            )
 
     def test_configuration_repr_never_contains_secret(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

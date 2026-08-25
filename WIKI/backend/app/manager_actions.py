@@ -572,7 +572,32 @@ class ManagerActionInterpreter:
     ) -> ManagerActionProposal:
         """Fill backend-owned context and remove contradictory clarification."""
 
+        subject = proposal.subject.strip()
         scope = proposal.scope.strip()
+        effective_period = proposal.effective_period.strip()
+        if proposal.action_type == "update_knowledge" and len(context.maintained_knowledge) == 1:
+            snapshot = context.maintained_knowledge[0]
+            manager_input = proposal.manager_input.casefold()
+            explicit_subject_change = re.search(
+                r"\b(?:rename|change)\s+(?:the\s+)?(?:subject|title)\b|"
+                r"\b(?:subject|title|argomento|titolo)\s*:",
+                manager_input,
+            )
+            explicit_scope_change = re.search(
+                r"\b(?:scope|ambito)\s*:|\bchange\s+(?:the\s+)?scope\b",
+                manager_input,
+            )
+            explicit_period_change = re.search(
+                r"\b(?:effective period|periodo di validit[aÃ ]|recurrence|ricorrenza)\b|"
+                r"\bfrom\s+every\b.+\bto\s+every\b|\bda\s+ogni\b.+\ba\s+ogni\b",
+                manager_input,
+            )
+            if not explicit_subject_change and snapshot.get("subject"):
+                subject = snapshot["subject"].strip()
+            if not explicit_scope_change and snapshot.get("scope"):
+                scope = snapshot["scope"].strip()
+            if not explicit_period_change and snapshot.get("effective_period"):
+                effective_period = snapshot["effective_period"].strip()
         if not scope:
             wiki_paths = [
                 str(citation.get("wiki_path", "")).strip()
@@ -587,8 +612,10 @@ class ManagerActionInterpreter:
 
         proposal = replace(
             proposal,
+            subject=subject,
             scope=scope,
             previous_value=previous_value,
+            effective_period=effective_period,
         )
 
         missing: list[str] = []

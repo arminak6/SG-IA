@@ -756,8 +756,9 @@ class WikiService:
                 cited.append(path)
 
         canonical = [path for path in cited if not path.casefold().startswith("sources/")]
+        owned = list(self.repository.source_manifest_pages(source_path))
         provenance = self.repository.provenance_pages(source_path)
-        selected = explicit + (canonical or cited) + provenance
+        selected = owned + explicit + (canonical or cited) + provenance
         return tuple(dict.fromkeys(selected))
 
     def _apply_answer_fix(
@@ -1072,8 +1073,25 @@ class WikiService:
                     continue
                 marker = "## Current approved knowledge"
                 current_value = content.split(marker, 1)[1].strip() if marker in content else content.strip()
+                subject_match = re.search(
+                    r"(?m)^#\s+Manager Knowledge:\s*(.+?)\s*$",
+                    content,
+                )
+                scope_match = re.search(r"(?m)^- Scope:\s*(.+?)\s*$", content)
+                period_match = re.search(
+                    r"(?m)^- Effective period:\s*(.+?)\s*$",
+                    content,
+                )
                 snapshots.append(
-                    {"source_path": source_path, "current_value": current_value}
+                    {
+                        "source_path": source_path,
+                        "current_value": current_value,
+                        "subject": subject_match.group(1).strip() if subject_match else "",
+                        "scope": scope_match.group(1).strip() if scope_match else "",
+                        "effective_period": (
+                            period_match.group(1).strip() if period_match else ""
+                        ),
+                    }
                 )
                 seen.add(folded)
         return tuple(snapshots)
@@ -1115,11 +1133,18 @@ class WikiService:
                 f"- Modifica le fonti di conoscenza: {'Sì' if proposal.changes_knowledge else 'No'}",
                 f"- Gestione della Wiki derivata: {proposal.derived_wiki_operation}",
                 f"- Argomento: {proposal.subject or 'Da specificare'}",
-                f"- Valore precedente: {proposal.previous_value or 'Non isolato'}",
-                f"- Conoscenza completa proposta: {proposal.new_value or 'Da specificare'}",
-                f"- Ambito: {proposal.scope or 'Da specificare'}",
-                f"- Periodo di validità: {effective}",
             ]
+            if proposal.action_type != "add_knowledge":
+                lines.append(
+                    f"- Valore precedente: {proposal.previous_value or 'Da specificare'}"
+                )
+            lines.extend(
+                [
+                    f"- Conoscenza completa proposta: {proposal.new_value or 'Da specificare'}",
+                    f"- Ambito: {proposal.scope or 'Da specificare'}",
+                    f"- Periodo di validità: {effective}",
+                ]
+            )
             if proposal.merge_warnings:
                 lines.append(
                     "- Revisione fusione: rimosse inferenze non supportate: "
@@ -1148,11 +1173,18 @@ class WikiService:
             f"- Changes source knowledge: {'Yes' if proposal.changes_knowledge else 'No'}",
             f"- Derived Wiki handling: {proposal.derived_wiki_operation}",
             f"- Subject: {proposal.subject or 'Not specified'}",
-            f"- Previous value: {proposal.previous_value or 'Not isolated'}",
-            f"- Proposed complete knowledge: {proposal.new_value or 'Not specified'}",
-            f"- Scope: {proposal.scope or 'Not specified'}",
-            f"- Effective period: {effective}",
         ]
+        if proposal.action_type != "add_knowledge":
+            lines.append(
+                f"- Previous value: {proposal.previous_value or 'Not specified'}"
+            )
+        lines.extend(
+            [
+                f"- Proposed complete knowledge: {proposal.new_value or 'Not specified'}",
+                f"- Scope: {proposal.scope or 'Not specified'}",
+                f"- Effective period: {effective}",
+            ]
+        )
         if proposal.merge_warnings:
             lines.append(
                 "- Merge review: removed unsupported inferred wording: "
@@ -1295,13 +1327,13 @@ class WikiService:
     def _correction_ingestion_failure_message(language: str, source_path: str) -> str:
         if language == "italian":
             return (
-                f"La fonte di correzione `{source_path}` è stata salvata, ma "
-                "l'integrazione nella Wiki non è riuscita. Rimane disponibile "
-                "come documento in attesa."
+                f"L'integrazione della modifica da `{source_path}` non è riuscita. "
+                "La fonte stabile e la Wiki sono state ripristinate; la proposta "
+                "rimane in attesa e può essere annullata o riprovata."
             )
         return (
-            f"The correction source `{source_path}` was saved, but Wiki ingestion "
-            "failed. It remains available as a pending document."
+            f"Wiki integration for `{source_path}` failed. The stable source and Wiki "
+            "were restored; the proposal remains pending and can be cancelled or retried."
         )
 
     @staticmethod

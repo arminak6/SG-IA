@@ -54,8 +54,8 @@ class BedrockConverseClient:
             "bedrock-runtime",
             config=Config(
                 connect_timeout=10,
-                read_timeout=300,
-                retries={"max_attempts": 3, "mode": "standard"},
+                read_timeout=60,
+                retries={"max_attempts": 1, "mode": "standard"},
             ),
             **client_kwargs,
         )

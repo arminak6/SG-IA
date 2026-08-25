@@ -184,11 +184,15 @@ After an API restart, an orphan `/confirm` or `/cancel` explains that the draft
 must be previewed again instead of entering Q&A.
 
 - `add_knowledge` creates one stable
-  `raw/manager-knowledge/<subject>.md` source, then normal ingestion creates its
-  source summary and any useful canonical pages.
+  `raw/manager-knowledge/<subject>.md` source, then deterministically writes the
+  approved text verbatim into its source summary and, when the path is free,
+  one canonical subject page. Manager additions do not use generated prose, so
+  the model cannot add inferred roles, duties, background, or consequences.
 - `update_knowledge` atomically replaces that same stable source and rewrites
-  its existing source summary and canonical pages. It cannot create another
-  Wiki page, the obsolete value is removed from active knowledge, and the
+  every existing page owned by its ingestion manifest, not only pages cited by
+  the last answer. It cannot create another Wiki page; a wholly obsolete page
+  can be deleted only when that manager source is its sole provenance. The
+  obsolete value is removed from active knowledge, and the
   semantic index replaces the changed sections. If integration fails, the raw
   source is rolled back to its previous complete value.
 - `fix_answer` creates no raw source. After confirmation, an isolated review
@@ -231,6 +235,11 @@ gets one bounded opportunity to repair its staged pages before rollback.
 Grounded answers apply the same principle to material percentage and
 confirmation qualifiers—including stated timing and communication method—
 attached to the requested value.
+Stable subject, scope, and effective-period metadata are reused automatically
+unless the manager explicitly changes them. Add previews omit the inapplicable
+previous-value field. Grounded answers reject calculated or unsupported clock
+times, AM/PM, and timezone/local-time qualifiers, and remove any model-written
+Sources section because citations are returned as structured API data.
 
 This is intentionally a trusted-manager POC, not a production authorization
 model. There is no login, role check, approval queue, rollback UI, or named
@@ -265,6 +274,8 @@ shared source corpus and reindexed by RAG.
   sanitized 503, and non-Bedrock application errors are never hidden by retries.
   Within an operation, an invalid structured answer followed by free text can
   receive one fresh bounded submission reminder instead of failing immediately.
+  Each Bedrock transport request has a 60-second read timeout and one SDK
+  attempt, preventing hidden SDK retries from multiplying that bounded policy.
 
 ## Answer confidence
 

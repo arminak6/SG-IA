@@ -435,6 +435,25 @@ class WikiRepository:
                     return False
             return True
 
+    def source_manifest_pages(self, source_path: str) -> tuple[str, ...]:
+        """Return the complete page ownership recorded for one ingested source."""
+
+        source = self.normalize_source_path(source_path)
+        with self._write_lock:
+            record = self._read_manifest().get(source, {})
+        pages = record.get("pages") if isinstance(record, Mapping) else None
+        if not isinstance(pages, list):
+            return ()
+        normalized: list[str] = []
+        for value in pages:
+            try:
+                page = self.normalize_wiki_path(str(value), allow_system=False)
+            except RepositoryError:
+                continue
+            if page not in normalized:
+                normalized.append(page)
+        return tuple(normalized)
+
     def list_raw_documents(self) -> list[RawDocument]:
         return self._list_raw_documents({})
 
@@ -870,6 +889,68 @@ class WikiRepository:
             return []
         with self._write_lock:
             return self._write_prepared_pages(prepared, manifest_source=source)
+
+    def commit_manager_update(
+        self,
+        source_path: str,
+        pages: Mapping[str, str],
+        *,
+        deleted_pages: Iterable[str] = (),
+    ) -> list[str]:
+        """Atomically rewrite and remove pages owned by one manager source."""
+
+        source = self.normalize_source_path(source_path)
+        prepared = self._prepare_wiki_pages(pages)
+        deleted: dict[str, Path] = {}
+        for value in deleted_pages:
+            normalized, target = self._wiki_file(str(value), allow_system=False)
+            if normalized in prepared:
+                raise RepositoryError(f"A page cannot be written and deleted: {normalized}")
+            deleted[normalized] = target
+        if not prepared and not deleted:
+            return []
+
+        with self._write_lock:
+            paths_to_snapshot = [target for target, _ in prepared.values()]
+            paths_to_snapshot.extend(deleted.values())
+            paths_to_snapshot.extend((self.wiki_root / "index.md", self.manifest_path))
+            snapshots = self._snapshot(paths_to_snapshot)
+            try:
+                for normalized, target in deleted.items():
+                    if not target.is_file():
+                        raise RepositoryError(
+                            f"Manager update deletion target does not exist: {normalized}"
+                        )
+                    target.unlink()
+                for normalized in sorted(prepared, key=str.casefold):
+                    target, content = prepared[normalized]
+                    self._atomic_write(target, content)
+                self.rebuild_index()
+                provenance = self.provenance_pages(source)
+                if not provenance:
+                    raise RepositoryError(
+                        f"Manager update removed every page for {source}."
+                    )
+                manifest = self._read_manifest()
+                manifest[source] = {
+                    "sha256": self.source_digest(source),
+                    "pages": provenance,
+                    "ingested_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                }
+                self._atomic_write(self.manifest_path, self._manifest_content(manifest))
+            except Exception as exc:
+                try:
+                    self._restore_snapshot(snapshots)
+                except RepositoryError as restore_exc:
+                    raise RepositoryError(
+                        f"Wiki transaction failed and rollback was incomplete: {restore_exc}"
+                    ) from exc
+                if isinstance(exc, RepositoryError):
+                    raise
+                raise RepositoryError(
+                    "Wiki transaction failed; all changes were rolled back."
+                ) from exc
+        return sorted(set(prepared) | set(deleted), key=str.casefold)
 
     def rebuild_index(self) -> None:
         with self._write_lock:

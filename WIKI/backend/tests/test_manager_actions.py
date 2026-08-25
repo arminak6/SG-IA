@@ -12,6 +12,7 @@ from backend.app.confidence import ConfidenceEvaluation
 from backend.app.config import BedrockSettings
 from backend.app.manager_actions import (
     ManagerActionContext,
+    ManagerActionInterpreter,
     ManagerActionProposal,
     ManagerActionStore,
     ManagerKnowledgeWrite,
@@ -351,6 +352,9 @@ The meeting is held annually on 13 July.
                 {
                     "source_path": "raw/manager-knowledge/meeting.md",
                     "current_value": "The meeting is held annually on 13 July.",
+                    "subject": "Meeting",
+                    "scope": "",
+                    "effective_period": "",
                 },
             ),
         )
@@ -364,6 +368,8 @@ The meeting is held annually on 13 July.
                 "/add Use the documented approved procedure.",
                 session_id="manager-add",
             )
+
+            self.assertNotIn("Previous value:", proposed["answer"])
             self.assertEqual(proposed["status"], "manager_action_proposed")
             self.assertTrue(proposed["manager_action"]["changes_knowledge"])
             self.assertEqual(store.calls, [])
@@ -643,6 +649,38 @@ The source contains the approved procedure.
                 )
             ],
         )
+
+    def test_update_preserves_manager_metadata_unless_explicitly_changed(self):
+        proposal = replace(
+            action("update_knowledge"),
+            subject="Procedure timing",
+            scope="model-inferred scope",
+            effective_period="ongoing",
+            manager_input="Change the confirmation lead time from one day to two days.",
+        )
+        context = ManagerActionContext(
+            question="When is it confirmed?",
+            answer="One day beforehand.",
+            citations=(),
+            maintained_knowledge=(
+                {
+                    "source_path": "raw/manager-knowledge/procedure.md",
+                    "current_value": "One day beforehand.",
+                    "subject": "Generic operating procedure",
+                    "scope": "operations",
+                    "effective_period": "weekly",
+                },
+            ),
+        )
+
+        completed = ManagerActionInterpreter._complete_explicit_proposal(
+            proposal,
+            context=context,
+        )
+
+        self.assertEqual(completed.subject, "Generic operating procedure")
+        self.assertEqual(completed.scope, "operations")
+        self.assertEqual(completed.effective_period, "weekly")
 
 
 if __name__ == "__main__":

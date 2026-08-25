@@ -235,10 +235,14 @@ when they are agreed.
   `/add`; all other messages remain normal Q&A, including later questions in
   the same session. The WIKI UI exposes dedicated action buttons and sends
   `/confirm` or `/cancel` for pending drafts. Additions create one stable
-  subject source under `raw/manager-knowledge/` and can create Wiki pages.
+  subject source under `raw/manager-knowledge/`; its approved text is
+  materialized verbatim into a deterministic source summary and optional
+  canonical subject page, without generated embellishment.
   Updates atomically replace that same source, rewrite its existing source
-  summary and canonical pages, and cannot increase the document or Wiki-page
-  count; failed integration restores the prior source. Action history stays in
+  summary and every manifest-owned page, preserve stable subject/scope/period
+  metadata, may delete a wholly obsolete source-exclusive page, and cannot
+  increase the document or Wiki-page count; failed integration restores the
+  prior source. Action history stays in
   `wiki/log.md`. Answer
   fixes create no raw knowledge: they must be verified from existing complete
   Wiki pages, then maintain one connected evidence page and create a non-indexed
@@ -263,7 +267,13 @@ when they are agreed.
   answers retain material percentage and confirmation qualifiers, including
   stated timing and communication method. Invalid
   structured-answer attempts followed by free text can receive one fresh
-  bounded submission reminder. The Sinergia mid-summer manager source and its
+  bounded submission reminder. Answer validation also rejects calculated or
+  unsupported times, AM/PM, and timezone/local-time qualifiers and strips
+  model-authored Sources sections. Bedrock transport is capped at a 60-second
+  read timeout and one SDK attempt. Two temporary held-out manager knowledge
+  lifecycles passed add/answer plus three update/answer rounds without page
+  growth on 2026-08-17, after which all temporary artifacts were removed. The
+  Sinergia mid-summer manager source and its
   two Wiki pages were repaired through the confirmed API flow on 2026-08-17 and
   now preserve the approved 100%-certainty statement and one-week email
   confirmation condition.

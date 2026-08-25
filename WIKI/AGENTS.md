@@ -282,6 +282,17 @@ logic.
   repaired through the confirmed API workflow. They now preserve the approved
   statement that the meeting is held on 13 July with 100% certainty and that
   Sinergia will email everyone one week beforehand to confirm the date.
+- Manager additions now materialize the approved value verbatim into one stable
+  source-summary page and, when the path is free, one canonical subject page;
+  no generation pass can embellish trusted new knowledge. Updates derive their
+  complete writable scope from manifest ownership, preserve stable subject,
+  scope, and effective-period metadata, and may atomically delete a wholly
+  obsolete page only when the manager source is its sole provenance.
+- Answer output strips model-written Sources sections and rejects calculated or
+  unsupported clock times, AM/PM, and timezone/local-time qualifiers. Bedrock
+  transport now uses a 60-second read timeout with one SDK attempt. Two live
+  temporary knowledge lifecycles passed add/answer plus three successive
+  update/answer rounds without page-count growth; all temporary data was removed.
 
 ## Data rules
 

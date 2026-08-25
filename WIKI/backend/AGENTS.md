@@ -70,9 +70,15 @@ Rules:
    your actions.
 8. A confirmed `raw/manager-knowledge/` source is trusted as the current
    manager-approved knowledge for its stated scope and effective period.
-   `add_knowledge` creates the stable source and its Wiki representation.
+   `add_knowledge` creates the stable source and materializes its source summary
+   and canonical subject page deterministically from the approved text. Do not
+   use generative prose for a manager addition or add inferred background,
+   roles, duties, or consequences.
    `update_knowledge` replaces the same stable source and rewrites only existing
-   application-approved Wiki pages, including its source summary. Remove the
+   application-approved Wiki pages, including every page owned by the source
+   manifest rather than only pages cited by the previous answer. A wholly
+   obsolete page may be deleted only when this manager source is its sole
+   provenance. Remove the
    obsolete manager-maintained value from active knowledge; action history
    belongs in `wiki/log.md`, not additional knowledge pages.
 9. For a confirmed `fix_answer`, the application may add manager-reviewed
@@ -151,6 +157,13 @@ because it was read; it must be integrated into the persistent wiki.
     Existing Wiki prose is not evidence. When the manager explicitly requests
     exact or verbatim wording, at least one maintained canonical page must
     preserve the complete approved statement rather than merely paraphrasing it.
+13. A stable manager source's subject, scope, and effective period are retained
+    during a factual update unless the manager explicitly changes that metadata.
+    An Add preview has no previous-value field. Grounded answer text must not
+    calculate unstated times, add AM/PM or timezone/local-time qualifiers, or
+    include its own Sources section; citations are returned structurally.
+14. Bedrock transport uses a 60-second read timeout and one SDK attempt. Keep
+    higher-level retries explicitly bounded by the operation contract.
 
 ## Maintenance checks
 
