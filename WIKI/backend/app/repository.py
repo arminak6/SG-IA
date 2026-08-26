@@ -1191,9 +1191,34 @@ class WikiRepository:
         if not sources_heading:
             raise RepositoryError(f"Wiki page has no Sources section: {target}")
         before_sources = body[: sources_heading.start()].rstrip()
-        sources_section = "## Sources\n\n" + "\n".join(
-            f"- {source}" for source in sorted(all_sources, key=str.casefold)
+        after_sources_heading = body[sources_heading.end() :]
+        following_heading = re.search(
+            r"^##\s+.+$", after_sources_heading, flags=re.MULTILINE
         )
+        if following_heading:
+            existing_sources = after_sources_heading[
+                : following_heading.start()
+            ].strip()
+            trailing_sections = after_sources_heading[
+                following_heading.start() :
+            ].strip()
+        else:
+            existing_sources = after_sources_heading.strip()
+            trailing_sections = ""
+
+        missing_sources = [
+            source
+            for source in sorted(all_sources, key=str.casefold)
+            if source not in existing_sources
+        ]
+        source_parts = [existing_sources] if existing_sources else []
+        if missing_sources:
+            source_parts.append("\n".join(f"- {source}" for source in missing_sources))
+        sources_section = "## Sources"
+        if source_parts:
+            sources_section += "\n\n" + "\n\n".join(source_parts)
+        if trailing_sections:
+            sources_section += f"\n\n{trailing_sections}"
         updated = (
             f"---\n{rendered_frontmatter}\n---\n\n"
             f"{before_sources}\n\n{section}\n\n{sources_section}\n"

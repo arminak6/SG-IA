@@ -128,3 +128,6 @@ Desktop.ini
 
 # Local backups of Git metadata, if ever needed during migration.
 /.git-backups/
+
+# Repository-local personal skills that must not be committed.
+/.agents/skills/cleanup-test-scripts/

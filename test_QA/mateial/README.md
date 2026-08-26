@@ -1,8 +1,17 @@
-# SG-IA ground-truth QA benchmark
+# SG-IA ground-truth QA benchmarks
 
-`ground_truth_qa.json` contiene 25 domande in italiano per confrontare le risposte dei backend WIKI e RAG sullo stesso materiale.
+Questa directory conserva due suite distinte per confrontare le risposte dei
+backend WIKI e RAG sullo stesso materiale:
 
-## Contenuto
+- **V1** — `ground_truth_qa.json`, 25 domande con ID `qa-*`.
+- **V2** — `v2/ground_truth_qa_v2.json`, 100 nuove domande con ID `v2-qa-*`.
+- **V2.1** — `v2.1/ground_truth_qa_v2_1.json`, 56 parafrasi dei casi WIKI V2
+  originariamente sotto 4/5, con ID `v2.1-qa-*` e ground truth invariata.
+
+La V2 non sostituisce né modifica la V1. Le istruzioni, i conteggi e il comando
+di validazione della nuova suite sono in `v2/README.md`.
+
+## Contenuto V1
 
 - 20 domande basate su una singola fonte.
 - 3 domande che richiedono sintesi tra più fonti.

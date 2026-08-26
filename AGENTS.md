@@ -87,7 +87,7 @@ normalize. At minimum, plan for these conceptual fields:
 Exact endpoint paths and schemas are not yet frozen. Record the decision here
 when they are agreed.
 
-## Current state (2026-08-14)
+## Current state (2026-08-25)
 
 - The project root is initialized as a `main`-branch Git monorepo containing
   the sibling `RAG/` and `WIKI/` implementations. The root README presents the
@@ -174,6 +174,24 @@ when they are agreed.
   two-page report is
   `output/pdf/SG-IA_RAG_Two_Page_Executive_Summary_V1_2.pdf`; detailed Italian
   and English-labelled audit records are stored in the run directory.
+- The complete RAG V2 benchmark is
+  `test_QA/experiments/v2/RAG/results/20260826T071250Z-a66415`. It evaluated all
+  100 V2 questions against the unchanged 24-document, 496-chunk Qdrant index,
+  with no OCR, extraction, upload, re-ingestion, or ground-truth injection. The
+  final recovery reused 99 hash-recorded chatbot responses from source run
+  `20260826T065624Z-9bcf92`, retried only one transient RAG generation failure,
+  and obtained 100/100 independent Claude Opus 5 judgments. Results are 4.06/5
+  correctness, 76.5% required-point coverage, 94.3% groundedness, 87.8%
+  expected-source recall, and 69/90 answerable cases scoring at least 4. All 10
+  negative controls abstained correctly; nine answerable cases falsely
+  abstained and 22/100 cases were flagged for unsupported claims. Detailed
+  Italian and English READMEs beside the executive PDF preserve every question,
+  RAG answer, ground truth, citation record, judge score, and explanation. The
+  two-page report is
+  `output/pdf/v2/RAG/1/SG-IA_RAG_V2_100Q_Executive_Summary.pdf`; its readable
+  audits are stored beside it, with report navigation under
+  `test_QA/experiments/v2/RAG/report/`. This is one stochastic run; the
+  prior 25-question fixture is not directly comparable.
 - `RAG/compose.yaml` independently starts Qdrant, FastAPI, and Streamlit with
   persistent named volumes. It supports either AWS environment credentials or
   a configurable local JSON credential file mounted read-only; no credentials
@@ -290,6 +308,85 @@ when they are agreed.
   Italian questions grounded in the WIKI raw corpus, with required answer
   points, source locators, evidence, and two insufficient-knowledge controls.
   `test_QA/mateial/README.md` documents the provisional comparison metrics.
+- `test_QA/mateial/v2/ground_truth_qa_v2.json` is the separate shared V2
+  fixture: 100 new Italian questions with `v2-qa-*` IDs, comprising 90
+  answerable cases and 10 insufficient-knowledge controls. It preserves V1,
+  has no exact V1 question reuse, covers all 24 hash-pinned comparison sources,
+  and includes a validator for schema, source coverage, and corpus hashes.
+- `test_QA/mateial/v2.1/ground_truth_qa_v2_1.json` is the focused WIKI
+  paraphrase-generalization fixture: 56 answerable Italian questions derived
+  exactly from the WIKI V2 baseline cases that originally scored below 4/5.
+  Each case has a new `v2.1-qa-*` ID and a `parent_case_id`; only the question
+  wording changes. Ground truths, required points, type, difficulty, sources,
+  locators, and evidence are unchanged from the V2 parent. The set has zero
+  exact V2 question overlap and no negative controls. It must be asked against
+  the post-manager WIKI without further knowledge updates, and compared with
+  the same 56 original baseline and exact-question post-update results rather
+  than with the full 100-question aggregate.
+- The completed WIKI V2 benchmark is
+  `test_QA/experiments/v2/WIKI/results/20260825T102607Z-8c0929`. All 100 WIKI
+  API responses and independent Claude Opus 5 judgments completed. Results are
+  3.26/5 correctness, 53.1% required-point coverage, 80.0% groundedness, 84.4%
+  expected-source recall, and 34/90 answerable cases scoring at least 4. All 10
+  negative controls abstained correctly, while 11 answerable cases falsely
+  abstained and 50/100 cases were flagged for unsupported claims. The run
+  reused only hash-recorded accepted outputs while retrying transient WIKI and
+  Bedrock failures; its current 65-page operational WIKI includes approved
+  manager knowledge in addition to the 24-document benchmark corpus. The
+  two-page report is
+  `output/pdf/v2/WIKI/1/SG-IA_WIKI_V2_100Q_Executive_Summary.pdf`; detailed Italian and
+  English audits are in the run directory. The V1 and V2 scores are not
+  directly comparable because the fixtures differ.
+- The first WIKI V2 knowledge-adaptation round completed on 2026-08-25 under
+  `test_QA/experiments/v2/WIKI/results/knowledge-repair/20260825T112513Z-knowledge-repair/round1-no-ocr`.
+  It sequentially asked all 56 answerable baseline cases scoring below 4/5,
+  recorded their pre-update responses, atomically added each approved ground
+  truth to its existing Wiki source-summary page, refreshed only the changed
+  semantic section, and linted after every update. All 56 questions and updates
+  completed with no API failures, no OCR or raw-document reads, 56 valid lint
+  checks, and no Wiki-page growth (65 pages). This is an explicit
+  knowledge-injection/adaptation run rather than an unbiased benchmark; the
+  post-update evaluation is recorded separately.
+- The complete post-manager WIKI V2 second round is
+  `test_QA/experiments/v2/WIKI/results/post-manager-round2/20260825T163400Z-365426`.
+  It preserves 100 fresh post-update chatbot answers and 99 immediately valid
+  judgments from source run `20260825T154155Z-ceeef8`; one transient Claude
+  Opus 5 service failure was recovered by retrying only that missing judgment.
+  All 100 API responses and judgments completed. Compared with the original V2
+  baseline, correctness moved from 3.26/5 to 4.61/5, answerable cases scoring
+  at least 4 from 34/90 to 85/90, required-point coverage from 53.1% to 91.2%,
+  groundedness from 80.0% to 94.9%, expected-source recall from 84.4% to 98.9%,
+  and false abstentions from 11 to 0; all 10 negative controls still abstained
+  correctly. On the exact 56 corrected cases, average correctness moved from
+  2.18/5 to 4.66/5, 54 improved, one was unchanged, one declined, and 54/56
+  now score at least 4. The two remaining below-4 cases are `v2-qa-034` and
+  `v2-qa-089`. Executive PDFs are
+  `output/pdf/v2/WIKI/2/SG-IA_WIKI_V2_Post_Manager_100Q_Executive_Summary.pdf`
+  and
+  `output/pdf/v2/WIKI/2/SG-IA_WIKI_V2_Manager_Corrections_56Q_Comparison.pdf`;
+  detailed
+  comparison artifacts are under
+  `test_QA/experiments/v2/WIKI/report/post-manager-round2/`. This deliberately
+  measures adaptation to disclosed ground truths, not unbiased generalization;
+  held-out documents and paraphrased questions remain required.
+- The completed WIKI V2.1 paraphrase-generalization run is
+  `test_QA/experiments/v2.1/WIKI/results/20260826T085356Z-1f857b`. It asked all
+  56 paraphrased questions against the unchanged post-manager Wiki, without OCR,
+  re-ingestion, or further knowledge updates, and completed all 56 WIKI calls
+  and independent Claude Opus 5 judgments without errors. Average correctness
+  was 4.66/5; 55/56 scored at least 4; required-point coverage was 98.0%,
+  groundedness 90.7%, expected-source recall 100%, and false abstentions 0.
+  Compared with the same 56 exact-wording post-manager cases, the average stayed
+  4.66/5, seven scores improved, 39 were unchanged, and ten declined; nine of
+  the declines were 5-to-4 movements. The only below-4 case was `v2.1-qa-003`
+  at 2/5. The judge flagged at least one unsupported claim in 23/56 answers, so
+  strong correctness does not imply perfect evidence discipline. Complete
+  Italian and English-labelled audits are in the run directory, comparison
+  artifacts are under `test_QA/experiments/v2.1/WIKI/report/`, and the two-page
+  report is
+  `output/pdf/v2.1/WIKI/1/SG-IA_WIKI_V2_1_Paraphrase_56Q_Executive_Summary.pdf`.
+  This evaluates generalization to new wording after ground-truth disclosure,
+  not unseen knowledge or held-out documents.
 - Automated semantic evaluation will use a separately configurable,
   high-capability Amazon Bedrock model as the LLM judge. Where practical, the
   judge model should differ from the chatbot model, use deterministic settings,
@@ -351,7 +448,7 @@ depends on them, then update this file:
   subset.
 - Model/provider and knowledge-generation pipeline for WIKI.
 - Common API request/response schema.
-- Final scoring weights and any expansion of the initial `test_QA/` benchmark.
+- Final scoring weights.
 
 ## How to maintain this memory
 

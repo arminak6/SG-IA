@@ -191,6 +191,10 @@ The source contains the approved procedure.
 ## Sources
 
 - raw/procedure.md
+
+## Related notes
+
+This post-sources section must be preserved by answer fixes.
 """
             }
         )
@@ -240,6 +244,8 @@ The source contains the approved procedure.
         self.assertEqual(applied["status"], "manager_action_applied")
         self.assertIn("Manager-reviewed guidance", after)
         self.assertIn("Use the documented approved procedure.", after)
+        self.assertIn("## Related notes", after)
+        self.assertIn("This post-sources section must be preserved", after)
         self.assertEqual(raw_actions, [])
         self.assertEqual(len(feedback), 1)
         self.assertEqual(applied["confidence_score"], 9.4)
