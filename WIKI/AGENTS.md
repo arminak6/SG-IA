@@ -306,8 +306,29 @@ logic.
   presentation/conversation context, never factual evidence; normal Wiki reads
   and citations remain mandatory. Calls without a user remain stateless for
   benchmark compatibility.
-- Explicit durable preference statements and `/remember` are saved, while a
-  profile editor supports direct review and changes. **New chat** and **Sign
+- Every normal identified-user message first passes through a dedicated,
+  temperature-zero structured preference interpreter that receives the complete
+  current preference list. It emits `none`, `temporary`, `add`, `replace`,
+  `remove`, or `clear`; persistent mutations require explicit intent and
+  confidence of at least 0.85, and removals must exactly match stored values.
+  Preference-only messages bypass Wiki Q&A, while mixed messages mutate first
+  and answer the remaining question using the resolved list. Manager commands
+  route before this detector, and userless benchmark calls bypass it. The
+  backend owns all validated writes; no LangGraph dependency is needed for this
+  linear POC flow.
+- An initial isolated-user smoke test on 2026-08-26 correctly replaced two
+  conflicting Italian/bilingual preferences after `never answer me in italian`,
+  but a later UI run classified the same behavioral constraint as deletion-only
+  and left the real profile empty. The structured contract now records intent
+  kind: behavioral prohibitions must be `persistent_behavior` with `add` or
+  `replace` and a retained actionable instruction; `remove` and `clear` are
+  accepted only with `memory_deletion`. Inconsistent output is rejected and
+  receives the one bounded repair attempt. After rebuilding, an isolated
+  conflict test produced `persistent_behavior` plus `replace` and retained the
+  prohibition. The emptied user profile was restored through the corrected
+  detector, and a fresh grounded question used one saved preference and
+  answered only in English; both validation transcripts were deleted.
+- A profile editor supports direct review and changes. **New chat** and **Sign
   out** delete only the active session transcript and manager draft state while
   retaining the profile and preferences. This remains an unauthenticated local
   POC and must not be treated as an identity or privacy boundary.

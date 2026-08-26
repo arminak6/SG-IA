@@ -169,9 +169,16 @@ index, and manifest changes roll back together if a commit fails.
 The Streamlit UI asks for a simple user name before chat begins. This is a
 claimed local identity, not authentication. Entering a new name creates
 `backend/user_data/<user_id>/preferences.json` and a readable `profile.md`.
-The user can edit or clear durable preferences in the UI. Explicit chat requests
-such as `Always answer me in Italian`, `/remember Keep answers concise`, and
-`Forget my preferences` are also handled without adding anything to the Wiki.
+The user can edit or clear durable preferences in the UI. For every normal
+message from an identified user, a separate temperature-zero Bedrock
+preference interpreter compares the message with the complete saved preference
+list. Its structured decision can add, replace, remove, or clear durable
+preferences, apply an instruction only to the current answer, ask for
+clarification, or make no change. For example, `never answer me in Italian`
+is persistent behavior: it replaces conflicting saved language instructions
+and remains stored as an actionable prohibition. A deletion-only `remove`
+decision is reserved for an explicit memory request such as
+`forget my saved language preference`. No preference is added to the Wiki.
 
 Each active chat writes its exact user and assistant messages to
 `backend/user_data/<user_id>/sessions/<session_id>.jsonl`. Before answering,
@@ -180,6 +187,15 @@ the saved preferences to the answer agent. Earlier sessions are never supplied.
 The model is instructed to use this private data only for conversational
 continuity and presentation; factual claims still require complete Wiki-page
 evidence and normal structured citations.
+
+Preference-only messages bypass retrieval and return an uncited acknowledgement.
+Mixed messages update the profile first and answer only the remaining factual
+question using the resolved preferences. Persistent mutations require an
+explicit, high-confidence decision and exact matches for removals; ambiguous
+decisions ask the user to clarify. The backend performs every validated file
+mutation. The UI refreshes the active profile from the backend on each rerun so
+the preference editor cannot remain stale after a server-side change. LangGraph
+is not required for this linear routing flow.
 
 **New chat** and **Sign out** delete the active session transcript and clear its
 in-memory manager-action state. They do not delete `preferences.json` or
@@ -190,7 +206,8 @@ transcript while only the latest 24 messages, capped at 16,000 characters, are
 sent to the model.
 
 API clients can continue calling `POST /chat` without a user, which preserves
-the stateless benchmark behavior. Personalized calls add `user_id` and
+the stateless benchmark behavior and avoids the extra preference-model call.
+Personalized calls add `user_id` and
 `session_id`. `GET /users/profile`, `PUT /users/profile`, and
 `POST /chat/reset` support the UI lifecycle.
 

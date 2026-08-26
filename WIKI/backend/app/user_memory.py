@@ -19,49 +19,8 @@ MAX_PREFERENCE_CHARACTERS = 500
 MAX_CONTEXT_MESSAGES = 24
 MAX_CONTEXT_CHARACTERS = 16_000
 
-FORGET_PREFERENCES_PATTERN = re.compile(
-    r"^(?:/forget(?:\s+(?:all\s+)?)?preferences?|forget\s+(?:all\s+)?my\s+preferences|"
-    r"dimentica\s+(?:tutte\s+)?le\s+mie\s+preferenze)\s*[.!]?$",
-    flags=re.IGNORECASE,
-)
-EXPLICIT_REMEMBER_PATTERN = re.compile(
-    r"^/remember\s+(.+)$",
-    flags=re.IGNORECASE | re.DOTALL,
-)
-DURABLE_PREFERENCE_PATTERN = re.compile(
-    r"^(?:please\s+)?always\b|^(?:from\s+now\s+on|remember(?:\s+that)?|"
-    r"i\s+prefer|my\s+preference\s+is)\b|"
-    r"^(?:per\s+favore\s+)?(?:rispondimi|rispondi)\s+sempre\b|"
-    r"^(?:d['']ora\s+in\s+poi|ricorda(?:ti)?(?:\s+che)?|preferisco)\b",
-    flags=re.IGNORECASE,
-)
-
-
 class UserMemoryError(ValueError):
     """Raised when user-memory input or persisted state is invalid."""
-
-
-@dataclass(frozen=True)
-class PreferenceInstruction:
-    action: str
-    value: str | None = None
-
-
-def detect_preference_instruction(message: str) -> PreferenceInstruction | None:
-    """Recognize explicit durable preference requests without classifying normal chat."""
-
-    cleaned = " ".join(str(message).strip().split())
-    if not cleaned:
-        return None
-    if FORGET_PREFERENCES_PATTERN.fullmatch(cleaned):
-        return PreferenceInstruction(action="clear")
-    explicit = EXPLICIT_REMEMBER_PATTERN.fullmatch(cleaned)
-    if explicit:
-        value = explicit.group(1).strip()
-        return PreferenceInstruction(action="add", value=value) if value else None
-    if DURABLE_PREFERENCE_PATTERN.search(cleaned):
-        return PreferenceInstruction(action="add", value=cleaned)
-    return None
 
 
 @dataclass(frozen=True)
@@ -176,9 +135,44 @@ class UserMemoryStore:
             )
         return profile
 
-    def add_preference(self, user_id: str, preference: str) -> UserProfile:
-        profile = self.get_profile(user_id)
-        return self.save_profile(user_id, (*profile.preferences, preference))
+    def apply_preference_changes(
+        self,
+        user_id: str,
+        *,
+        preferences_to_add: Sequence[str] = (),
+        preferences_to_remove: Sequence[str] = (),
+        clear: bool = False,
+    ) -> UserProfile:
+        """Atomically apply validated changes while preserving unrelated preferences."""
+
+        normalized_user = self.normalize_user_id(user_id)
+        additions = self.normalize_preferences(preferences_to_add)
+        removals = self.normalize_preferences(preferences_to_remove)
+        with self._lock:
+            current = self.get_profile(normalized_user)
+            current_by_folded = {
+                preference.casefold(): preference for preference in current.preferences
+            }
+            missing = [
+                preference
+                for preference in removals
+                if preference.casefold() not in current_by_folded
+            ]
+            if missing:
+                raise UserMemoryError(
+                    "cannot remove a preference that is not currently saved"
+                )
+            if clear:
+                resolved: tuple[str, ...] = ()
+            else:
+                removal_keys = {preference.casefold() for preference in removals}
+                retained = [
+                    preference
+                    for preference in current.preferences
+                    if preference.casefold() not in removal_keys
+                ]
+                resolved = self.normalize_preferences((*retained, *additions))
+            return self.save_profile(normalized_user, resolved)
 
     def append_exchange(
         self,

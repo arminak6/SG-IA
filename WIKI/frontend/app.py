@@ -567,6 +567,19 @@ if "active_user_id" not in st.session_state:
     st.stop()
 
 active_user_id = str(st.session_state.active_user_id)
+try:
+    current_profile = api.get_user_profile(active_user_id)
+    current_preferences = list(current_profile.preferences)
+    if current_preferences != list(
+        st.session_state.get("user_preferences", [])
+    ):
+        st.session_state.user_preferences = current_preferences
+        st.session_state.preference_editor_version = (
+            int(st.session_state.get("preference_editor_version", 0)) + 1
+        )
+except WikiApiError as exc:
+    st.warning(f"Could not refresh the saved user preferences. {exc}")
+
 identity_col, new_chat_col, sign_out_col = st.columns([4, 1, 1])
 identity_col.markdown(f"Signed in as **{escape(active_user_id)}**")
 
@@ -721,7 +734,7 @@ if question:
             }
             if manager_message is not None and response.status != "manager_action_error":
                 st.session_state.clear_manager_action_on_next_run = True
-            if response.status in {"preference_saved", "preferences_cleared"}:
+            if response.preference_changed:
                 profile = api.get_user_profile(active_user_id)
                 st.session_state.user_preferences = list(profile.preferences)
                 st.session_state.preference_editor_version = (

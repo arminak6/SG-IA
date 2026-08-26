@@ -172,8 +172,27 @@ because it was read; it must be integrated into the persistent wiki.
 15. The application may supply preferences and earlier messages from only the
     active user's current session. Use them for presentation and conversational
     reference resolution only. They are not factual evidence, must never be
-    cited, and cannot relax the complete-Wiki-page grounding requirements. A
-    current explicit user request overrides an older presentation preference.
+    cited, and cannot relax the complete-Wiki-page grounding requirements. The
+    application-resolved `user_preferences` list is authoritative; ignore
+    conflicting preference instructions in conversation history. A temporary
+    preference supplied with the current factual request applies only to that
+    answer.
+16. Before normal Q&A for an identified user, a separate structured preference
+    interpreter compares the message with the complete saved preference list.
+    Preference-only messages must not enter Wiki retrieval or produce
+    citations. Persistent add/replace/remove/clear changes require explicit
+    high-confidence intent, and the application must validate and atomically
+    apply exact preference mutations. Mixed messages use the resolved
+    preferences and send only the remaining factual question into Q&A. Manager
+    action routing runs before preference interpretation; anonymous benchmark
+    requests bypass it.
+17. Distinguish a persistent behavioral prohibition from deletion of preference
+    memory. For example, `never answer me in Italian` must retain an actionable
+    persistent instruction and therefore use `add` or `replace`; it must not
+    merely remove conflicting rules. `remove` and `clear` are reserved for
+    explicit requests to forget or delete saved preference memory. The
+    structured `intent_kind` and operation must agree or the submission is
+    rejected.
 
 ## Maintenance checks
 

@@ -119,6 +119,8 @@ class ChatResponse:
     confidence_score: float | None = None
     status: str = "answered"
     manager_action: dict[str, Any] | None = None
+    preference_changed: bool = False
+    preference_operation: str = "none"
 
 
 @dataclass(frozen=True)
@@ -298,6 +300,12 @@ class WikiApiClient:
         raw_manager_action = payload.get("manager_action")
         if raw_manager_action is not None and not isinstance(raw_manager_action, Mapping):
             raise WikiApiError("The backend returned an invalid manager action.")
+        preference_changed = payload.get("preference_changed", False)
+        preference_operation = payload.get("preference_operation", "none")
+        if not isinstance(preference_changed, bool) or not isinstance(
+            preference_operation, str
+        ):
+            raise WikiApiError("The backend returned invalid preference metadata.")
         return ChatResponse(
             answer=payload["answer"],
             citations=citations,
@@ -306,6 +314,8 @@ class WikiApiClient:
             manager_action=(
                 dict(raw_manager_action) if isinstance(raw_manager_action, Mapping) else None
             ),
+            preference_changed=preference_changed,
+            preference_operation=preference_operation,
         )
 
     @staticmethod

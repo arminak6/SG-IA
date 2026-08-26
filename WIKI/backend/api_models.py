@@ -120,6 +120,11 @@ class ChatDebugResponse(ApiModel):
     history_messages_used: int = Field(default=0, ge=0)
     user_preferences_used: int = Field(default=0, ge=0)
     history_saved: Optional[bool] = None
+    preference_detection_attempts: int = Field(default=0, ge=0, le=2)
+    preference_operation: str = "none"
+    preference_intent: str = "no_preference"
+    preference_changed: bool = False
+    preference_clarification_required: bool = False
     guardrail: ChatGuardrailResponse = Field(default_factory=ChatGuardrailResponse)
 
 
@@ -200,6 +205,8 @@ class ChatResponse(ApiModel):
     latency_ms: float = Field(ge=0)
     model_id: Optional[str] = None
     confidence_score: Optional[float] = Field(default=None, ge=0, le=10)
+    preference_changed: bool = False
+    preference_operation: str = "none"
     debug: ChatDebugResponse = Field(default_factory=ChatDebugResponse)
     manager_action: Optional[ChatCorrectionResponse] = None
     correction: Optional[ChatCorrectionResponse] = None

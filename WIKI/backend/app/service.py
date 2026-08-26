@@ -25,12 +25,10 @@ from .manager_actions import (
     ManagerKnowledgeWrite,
 )
 from .embeddings import TitanEmbeddingClient
+from .preference_interpreter import PreferenceDecision, PreferenceInterpreter
 from .repository import RepositoryError, WikiRepository
 from .search import HybridWikiSearch
-from .user_memory import (
-    UserMemoryStore,
-    detect_preference_instruction,
-)
+from .user_memory import UserMemoryStore
 
 
 logger = logging.getLogger(__name__)
@@ -63,6 +61,7 @@ class WikiService:
         correction_store: ManagerActionStore | None = None,
         answer_fix_reviewer: AnswerFixReviewer | None = None,
         user_memory_store: UserMemoryStore | None = None,
+        preference_interpreter: PreferenceInterpreter | None = None,
     ) -> None:
         self.settings = settings or load_settings()
         self.repository = repository or WikiRepository(
@@ -77,6 +76,7 @@ class WikiService:
         self._correction_interpreter = correction_interpreter
         self._correction_store = correction_store
         self._answer_fix_reviewer = answer_fix_reviewer
+        self._preference_interpreter = preference_interpreter
         self.user_memory_store = user_memory_store or UserMemoryStore(
             self.settings.backend_root / "user_data"
         )
@@ -139,6 +139,12 @@ class WikiService:
                 self.searcher,
             )
         return self._answer_fix_reviewer
+
+    @property
+    def preference_interpreter(self) -> PreferenceInterpreter:
+        if self._preference_interpreter is None:
+            self._preference_interpreter = PreferenceInterpreter(self.bedrock)
+        return self._preference_interpreter
 
     def health(self) -> dict[str, object]:
         documents = self.repository.list_raw_documents()
@@ -400,45 +406,77 @@ class WikiService:
                     include_in_context=False,
                 )
 
-        preference_instruction = (
-            detect_preference_instruction(question) if normalized_user_id else None
-        )
-        if preference_instruction is not None:
-            if preference_instruction.action == "clear":
-                profile = self.user_memory_store.save_profile(normalized_user_id, ())
-                response = self._preference_response(
-                    question,
-                    "preferences_cleared",
-                    profile.preferences,
-                    started_at=started_at,
-                )
-            else:
-                profile = self.user_memory_store.add_preference(
-                    normalized_user_id,
-                    preference_instruction.value or "",
-                )
-                response = self._preference_response(
-                    question,
-                    "preference_saved",
-                    profile.preferences,
-                    started_at=started_at,
-                )
-            return self._complete_chat(
-                normalized_user_id,
-                normalized_session_id,
+        preference_decision: PreferenceDecision | None = None
+        effective_preferences = preferences
+        answer_question = question
+        if normalized_user_id:
+            preference_decision = self.preference_interpreter.interpret(
                 question,
-                response,
-                include_in_context=False,
+                current_preferences=preferences,
+                conversation_history=conversation_history,
             )
+            if preference_decision.requires_clarification:
+                response = self._preference_response(
+                    preference_decision,
+                    "preference_clarification_required",
+                    preferences,
+                    started_at=started_at,
+                )
+                return self._complete_chat(
+                    normalized_user_id,
+                    normalized_session_id,
+                    question,
+                    response,
+                    include_in_context=False,
+                )
+            if preference_decision.changes_persistent_preferences:
+                profile = self.user_memory_store.apply_preference_changes(
+                    normalized_user_id,
+                    preferences_to_add=preference_decision.preferences_to_add,
+                    preferences_to_remove=preference_decision.preferences_to_remove,
+                    clear=preference_decision.operation == "clear",
+                )
+                effective_preferences = profile.preferences
+                if preference_decision.is_preference_only:
+                    status = (
+                        "preferences_cleared"
+                        if preference_decision.operation == "clear"
+                        else "preference_saved"
+                        if preference_decision.operation == "add"
+                        else "preferences_updated"
+                    )
+                    response = self._preference_response(
+                        preference_decision,
+                        status,
+                        effective_preferences,
+                        started_at=started_at,
+                    )
+                    return self._complete_chat(
+                        normalized_user_id,
+                        normalized_session_id,
+                        question,
+                        response,
+                        include_in_context=False,
+                    )
+                answer_question = preference_decision.remaining_question
+            elif preference_decision.operation == "temporary":
+                effective_preferences = tuple(
+                    dict.fromkeys(
+                        (*preferences, *preference_decision.preferences_to_add)
+                    )
+                )
+                answer_question = preference_decision.remaining_question
 
         response = self._answer_question(
-            question,
+            answer_question,
             started_at=started_at,
             conversation_history=conversation_history,
-            user_preferences=preferences,
+            user_preferences=effective_preferences,
         )
+        if preference_decision is not None:
+            self._attach_preference_decision(response, preference_decision)
         if normalized_session_id:
-            self._remember_answer(normalized_session_id, question, response)
+            self._remember_answer(normalized_session_id, answer_question, response)
         return self._complete_chat(
             normalized_user_id,
             normalized_session_id,
@@ -614,20 +652,30 @@ class WikiService:
 
     def _preference_response(
         self,
-        question: str,
+        decision: PreferenceDecision,
         status: str,
         preferences: Sequence[str],
         *,
         started_at: float,
     ) -> dict[str, object]:
-        italian = bool(
-            re.search(r"\b(?:italian|italiano|italiana|preferenza|ricorda)\b", question, re.I)
+        italian = decision.language == "italian"
+        preference_changed = (
+            decision.changes_persistent_preferences
+            and status != "preference_clarification_required"
         )
-        if status == "preferences_cleared":
+        if status == "preference_clarification_required":
+            answer = decision.clarification_question
+        elif status == "preferences_cleared":
             answer = (
                 "Ho eliminato le tue preferenze salvate."
                 if italian
                 else "I cleared your saved preferences."
+            )
+        elif status == "preferences_updated":
+            answer = (
+                "Ho aggiornato le tue preferenze salvate e user\u00f2 quelle nuove nelle prossime chat."
+                if italian
+                else "I updated your saved preferences and will use the resolved preferences in future chats."
             )
         else:
             answer = (
@@ -640,7 +688,7 @@ class WikiService:
             "status": status,
             "answer": answer,
             "citations": [],
-            "usage": {},
+            "usage": dict(decision.usage),
             "latency_ms": round((time.perf_counter() - started_at) * 1000, 2),
             "model_id": self.settings.bedrock_model_id,
             "confidence_score": None,
@@ -653,6 +701,11 @@ class WikiService:
                 "answer_retry_applied": False,
                 "history_messages_used": 0,
                 "user_preferences_used": len(preferences),
+                "preference_detection_attempts": decision.attempts,
+                "preference_operation": decision.operation,
+                "preference_intent": decision.intent_kind,
+                "preference_changed": preference_changed,
+                "preference_clarification_required": decision.requires_clarification,
                 "guardrail": {
                     "enabled": self.settings.answer_guardrail_enabled,
                     "applied": False,
@@ -661,7 +714,28 @@ class WikiService:
                     "reasons": [],
                 },
             },
+            "preference_changed": preference_changed,
+            "preference_operation": decision.operation,
         }
+
+    @staticmethod
+    def _attach_preference_decision(
+        response: dict[str, object],
+        decision: PreferenceDecision,
+    ) -> None:
+        usage = response.setdefault("usage", {})
+        if isinstance(usage, dict):
+            for key, value in decision.usage.items():
+                usage[str(key)] = int(usage.get(str(key), 0)) + int(value)
+        debug = response.setdefault("debug", {})
+        if isinstance(debug, dict):
+            debug["preference_detection_attempts"] = decision.attempts
+            debug["preference_operation"] = decision.operation
+            debug["preference_intent"] = decision.intent_kind
+            debug["preference_changed"] = decision.changes_persistent_preferences
+            debug["preference_clarification_required"] = False
+        response["preference_changed"] = decision.changes_persistent_preferences
+        response["preference_operation"] = decision.operation
 
     def _handle_correction_message(
         self,

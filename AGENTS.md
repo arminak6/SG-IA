@@ -397,6 +397,29 @@ when they are agreed.
   Personalized API calls use `user_id` plus `session_id`; userless benchmark
   calls remain stateless and backward compatible. Both Compose entry points
   persist the private directory with a dedicated bind mount.
+- Every normal message from an identified WIKI user now passes through a
+  separate temperature-zero structured preference interpreter before grounded
+  Q&A. It compares the message with all current preferences and returns
+  `none`, `temporary`, `add`, `replace`, `remove`, or `clear`.
+  Persistent changes require explicit intent plus confidence of at least 0.85;
+  removals must name exact stored values and the backend performs the atomic
+  mutation. Preference-only messages return without Wiki retrieval or
+  citations; mixed messages update first and answer only the remaining factual
+  question with the resolved preferences. Manager commands route first and
+  userless benchmark calls avoid the detector and remain stateless. This linear
+  routing does not currently require LangGraph.
+- An initial isolated-user test on 2026-08-26 produced the intended replacement,
+  but a later real UI run exposed a stochastic deletion-only classification for
+  the same `never answer me in italian` command and left the profile empty.
+  Preference decisions now include a separately validated intent kind:
+  behavioral prohibitions require `persistent_behavior` plus `add` or
+  `replace` and a retained actionable instruction; only explicit requests to
+  delete remembered rules may use `memory_deletion` plus `remove` or
+  `clear`. Inconsistent structured output is rejected and retried once.
+  Post-fix live validation produced `persistent_behavior` plus `replace` for
+  the conflict case, retained the prohibition, and a fresh grounded question
+  consumed the saved preference and answered only in English. Temporary
+  validation profiles and transcripts were removed.
 - WIKI read-only Q&A now also restarts once after the specific recoverable
   protocol failure where the answer model does not submit its structured
   grounded answer after the existing reminder. This uses the same bounded

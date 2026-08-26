@@ -92,6 +92,8 @@ class WikiApiClientTests(unittest.TestCase):
                 "confidence_score": 8.7,
                 "status": "answered",
                 "manager_action": None,
+                "preference_changed": True,
+                "preference_operation": "add",
             }
         )
 
@@ -109,6 +111,8 @@ class WikiApiClientTests(unittest.TestCase):
         self.assertEqual(result.confidence_score, 8.7)
         self.assertEqual(result.status, "answered")
         self.assertIsNone(result.manager_action)
+        self.assertTrue(result.preference_changed)
+        self.assertEqual(result.preference_operation, "add")
         _, _, kwargs = self.session.request.mock_calls[0]
         self.assertEqual(
             kwargs["json"],
