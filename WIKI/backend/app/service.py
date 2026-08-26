@@ -38,7 +38,8 @@ class WikiService:
     """Coordinate deterministic repository work and sequential LLM operations."""
 
     MAX_CHAT_SESSIONS = 200
-    MAX_ANSWER_ATTEMPTS = 2
+    MAX_ANSWER_ATTEMPTS = 4
+    ANSWER_RETRY_BACKOFF_SECONDS = (0.25, 0.5, 1.0)
     WIKI_SCOPE_PATH_PATTERN = re.compile(
         r"(?:sources|concepts|entities|syntheses)/[^\s`'\"<>]+?\.md",
         flags=re.IGNORECASE,
@@ -494,6 +495,8 @@ class WikiService:
         user_preferences: Sequence[str] = (),
     ) -> dict[str, object]:
         answer_attempts = 0
+        answer_bedrock_failures = 0
+        answer_submission_failures = 0
         for attempt in range(1, self.MAX_ANSWER_ATTEMPTS + 1):
             answer_attempts = attempt
             try:
@@ -507,14 +510,23 @@ class WikiService:
                     result = self.agent.answer(question)
                 break
             except (BedrockError, AnswerSubmissionError) as exc:
+                if isinstance(exc, BedrockError):
+                    answer_bedrock_failures += 1
+                else:
+                    answer_submission_failures += 1
                 if attempt < self.MAX_ANSWER_ATTEMPTS:
+                    backoff_seconds = self.ANSWER_RETRY_BACKOFF_SECONDS[
+                        min(attempt - 1, len(self.ANSWER_RETRY_BACKOFF_SECONDS) - 1)
+                    ]
                     logger.warning(
                         "Wiki answer attempt %d/%d failed (%s); retrying the "
-                        "read-only Q&A operation.",
+                        "read-only Q&A operation after %.2f seconds.",
                         attempt,
                         self.MAX_ANSWER_ATTEMPTS,
                         type(exc).__name__,
+                        backoff_seconds,
                     )
+                    time.sleep(backoff_seconds)
                     continue
                 try:
                     self.repository.append_log(
@@ -581,6 +593,8 @@ class WikiService:
         if isinstance(debug, dict):
             debug["answer_attempts"] = answer_attempts
             debug["answer_retry_applied"] = answer_attempts > 1
+            debug["answer_bedrock_failures"] = answer_bedrock_failures
+            debug["answer_submission_failures"] = answer_submission_failures
             debug["history_messages_used"] = len(conversation_history)
             debug["user_preferences_used"] = len(user_preferences)
             debug["guardrail"] = {

@@ -214,7 +214,7 @@ class CoreTests(unittest.TestCase):
         self.assertTrue(answer["debug"]["answer_retry_applied"])
         self.assertIn("retrying the read-only Q&A operation", logs.output[0])
 
-    def test_answer_stops_after_two_bedrock_failures(self) -> None:
+    def test_answer_stops_after_four_bedrock_failures(self) -> None:
         class FailingAnswerAgent:
             def __init__(self):
                 self.calls = 0
@@ -236,7 +236,49 @@ class CoreTests(unittest.TestCase):
                 with self.assertRaises(BedrockError):
                     service.ask("When is the meeting?")
 
-        self.assertEqual(agent.calls, 2)
+        self.assertEqual(agent.calls, 4)
+
+    def test_answer_recovers_from_mixed_failures_on_fourth_attempt(self) -> None:
+        class MixedFailureAgent:
+            def __init__(self):
+                self.calls = 0
+
+            def answer(self, question):
+                self.calls += 1
+                if self.calls in {1, 3}:
+                    raise BedrockError("Temporary Bedrock failure")
+                if self.calls == 2:
+                    raise AnswerSubmissionError(
+                        "Model did not submit a structured grounded answer."
+                    )
+                return AnswerResult(
+                    status="answered",
+                    answer="The meeting is on 14 July 2027.",
+                    citations=(),
+                    usage={"inputTokens": 3},
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = BedrockSettings(
+                project_root=Path(temp_dir),
+                region_name="eu-west-1",
+                bedrock_model_id="test-model",
+            )
+            agent = MixedFailureAgent()
+            service = WikiService(
+                settings,
+                agent=agent,
+                confidence_evaluator=StaticConfidenceEvaluator(),
+            )
+
+            with self.assertLogs("backend.app.service", level="WARNING"):
+                answer = service.ask("When is the meeting?")
+
+        self.assertEqual(answer["status"], "answered")
+        self.assertEqual(agent.calls, 4)
+        self.assertEqual(answer["debug"]["answer_attempts"], 4)
+        self.assertEqual(answer["debug"]["answer_bedrock_failures"], 2)
+        self.assertEqual(answer["debug"]["answer_submission_failures"], 1)
 
     def test_answer_retries_after_missing_structured_submission(self) -> None:
         class FlakyProtocolAgent:

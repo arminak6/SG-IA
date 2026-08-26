@@ -115,8 +115,10 @@ class ChatDebugResponse(ApiModel):
     search_queries: List[str] = Field(default_factory=list)
     search_modes: List[str] = Field(default_factory=list)
     retrieval_diagnostics: List[dict[str, object]] = Field(default_factory=list)
-    answer_attempts: int = Field(default=1, ge=1, le=2)
+    answer_attempts: int = Field(default=1, ge=1, le=4)
     answer_retry_applied: bool = False
+    answer_bedrock_failures: int = Field(default=0, ge=0, le=4)
+    answer_submission_failures: int = Field(default=0, ge=0, le=4)
     history_messages_used: int = Field(default=0, ge=0)
     user_preferences_used: int = Field(default=0, ge=0)
     history_saved: Optional[bool] = None

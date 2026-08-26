@@ -236,10 +236,12 @@ when they are agreed.
   remains the direct Hybrid flow without the evidence-first ledger/verifier.
   API debug data exposes lexical/semantic ranks, selected parent pages, and
   matched sections for evaluation.
-- WIKI read-only Q&A retries the complete answer-agent operation exactly once
-  after a `BedrockError`, exposes the attempt count in debug metadata, and
-  continues to return a sanitized 503 if the retry also fails. Non-Bedrock
-  failures are not retried.
+- WIKI read-only Q&A now permits four total complete answer-agent attempts for
+  `BedrockError` and structured `AnswerSubmissionError` failures, with 0.25,
+  0.5, and 1.0 second backoffs. Debug metadata separates transport and
+  submission-failure counts. A fourth recoverable failure returns a sanitized
+  503; unrelated validation/application failures and all write workflows remain
+  non-retryable.
 - WIKI chat responses include an optional 0-10 evidence-confidence score. A
   separate post-answer Bedrock pass verifies the answer against complete cited
   Wiki pages and exposes stable warning reasons. For the current POC this gate
@@ -420,11 +422,10 @@ when they are agreed.
   the conflict case, retained the prohibition, and a fresh grounded question
   consumed the saved preference and answered only in English. Temporary
   validation profiles and transcripts were removed.
-- WIKI read-only Q&A now also restarts once after the specific recoverable
-  protocol failure where the answer model does not submit its structured
-  grounded answer after the existing reminder. This uses the same bounded
-  two-attempt ceiling as Bedrock transport recovery; unrelated validation
-  errors and every manager/write workflow remain non-retryable.
+- WIKI read-only Q&A treats both transient Bedrock transport failures and
+  missing structured answer submissions as recoverable within the shared
+  four-total-attempt ceiling. Unrelated validation errors and every
+  manager/write workflow remain non-retryable.
 - Automated semantic evaluation will use a separately configurable,
   high-capability Amazon Bedrock model as the LLM judge. Where practical, the
   judge model should differ from the chatbot model, use deterministic settings,
