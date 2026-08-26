@@ -311,6 +311,10 @@ logic.
   out** delete only the active session transcript and manager draft state while
   retaining the profile and preferences. This remains an unauthenticated local
   POC and must not be treated as an identity or privacy boundary.
+- Read-only Q&A now retries the complete answer operation once when the answer
+  model fails to invoke the required structured submission tool after its
+  existing reminder. This addresses observed intermittent 503 responses while
+  keeping unrelated validation failures and all write workflows non-retryable.
 
 ## Data rules
 

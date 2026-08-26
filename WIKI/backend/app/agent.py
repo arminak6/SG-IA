@@ -27,6 +27,10 @@ class AgentValidationError(AgentError):
     """Raised when a model claims completion without satisfying invariants."""
 
 
+class AnswerSubmissionError(AgentValidationError):
+    """Raised when read-only Q&A fails to submit its required structured answer."""
+
+
 def _normalize_wiki_local_links(content: str) -> str:
     """Convert model-emitted root-style Wiki links to valid sibling links."""
 
@@ -1458,7 +1462,9 @@ sources:
             tool_uses = self._tool_uses(turn)
             if not tool_uses:
                 if consecutive_no_tool_turns >= 1:
-                    raise AgentValidationError("Model did not submit a structured grounded answer.")
+                    raise AnswerSubmissionError(
+                        "Model did not submit a structured grounded answer."
+                    )
                 messages.append(
                     {
                         "role": "user",

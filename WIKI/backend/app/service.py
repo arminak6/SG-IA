@@ -11,7 +11,7 @@ from dataclasses import replace
 from functools import lru_cache
 from typing import Mapping, Sequence
 
-from .agent import WikiAgent, build_ingestion_prompt
+from .agent import AnswerSubmissionError, WikiAgent, build_ingestion_prompt
 from .answer_fixes import AnswerFixReviewer
 from .bedrock import BedrockConverseClient, BedrockError
 from .confidence import ConfidenceEvaluation, ConfidenceEvaluator
@@ -468,10 +468,10 @@ class WikiService:
                 else:
                     result = self.agent.answer(question)
                 break
-            except BedrockError as exc:
+            except (BedrockError, AnswerSubmissionError) as exc:
                 if attempt < self.MAX_ANSWER_ATTEMPTS:
                     logger.warning(
-                        "Wiki answer Bedrock attempt %d/%d failed (%s); retrying the "
+                        "Wiki answer attempt %d/%d failed (%s); retrying the "
                         "read-only Q&A operation.",
                         attempt,
                         self.MAX_ANSWER_ATTEMPTS,

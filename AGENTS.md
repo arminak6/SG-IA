@@ -397,6 +397,11 @@ when they are agreed.
   Personalized API calls use `user_id` plus `session_id`; userless benchmark
   calls remain stateless and backward compatible. Both Compose entry points
   persist the private directory with a dedicated bind mount.
+- WIKI read-only Q&A now also restarts once after the specific recoverable
+  protocol failure where the answer model does not submit its structured
+  grounded answer after the existing reminder. This uses the same bounded
+  two-attempt ceiling as Bedrock transport recovery; unrelated validation
+  errors and every manager/write workflow remain non-retryable.
 - Automated semantic evaluation will use a separately configurable,
   high-capability Amazon Bedrock model as the LLM judge. Where practical, the
   judge model should differ from the chatbot model, use deterministic settings,

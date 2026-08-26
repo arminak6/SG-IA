@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from backend.app.agent import (
     AgentValidationError,
+    AnswerSubmissionError,
     AnswerResult,
     Citation,
     IngestionResult,
@@ -236,6 +237,47 @@ class CoreTests(unittest.TestCase):
                     service.ask("When is the meeting?")
 
         self.assertEqual(agent.calls, 2)
+
+    def test_answer_retries_after_missing_structured_submission(self) -> None:
+        class FlakyProtocolAgent:
+            def __init__(self):
+                self.calls = 0
+
+            def answer(self, question):
+                self.calls += 1
+                if self.calls == 1:
+                    raise AnswerSubmissionError(
+                        "Model did not submit a structured grounded answer."
+                    )
+                return AnswerResult(
+                    status="answered",
+                    answer="The meeting is on 14 July 2027.",
+                    citations=(),
+                    usage={"inputTokens": 3},
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = BedrockSettings(
+                project_root=Path(temp_dir),
+                region_name="eu-west-1",
+                bedrock_model_id="test-model",
+            )
+            agent = FlakyProtocolAgent()
+            service = WikiService(
+                settings,
+                agent=agent,
+                confidence_evaluator=StaticConfidenceEvaluator(),
+            )
+
+            with self.assertLogs("backend.app.service", level="WARNING") as logs:
+                answer = service.ask("When is the meeting?")
+
+        self.assertEqual(answer["status"], "answered")
+        self.assertEqual(agent.calls, 2)
+        self.assertEqual(answer["debug"]["answer_attempts"], 2)
+        self.assertTrue(answer["debug"]["answer_retry_applied"])
+        self.assertIn("AnswerSubmissionError", logs.output[0])
+        self.assertIn("retrying the read-only Q&A operation", logs.output[0])
 
     def test_answer_does_not_retry_non_bedrock_failures(self) -> None:
         class BrokenAnswerAgent:

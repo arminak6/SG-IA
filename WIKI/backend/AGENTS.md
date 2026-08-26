@@ -123,8 +123,10 @@ because it was read; it must be integrated into the persistent wiki.
 7. Never cite a page merely because it is topically related. Every cited page
    must directly support at least one material part of the submitted answer.
 8. The application may restart the complete read-only Q&A operation once after
-   a `BedrockError`. Do not extend this into unbounded retries or retry
-   non-Bedrock failures; repeated model calls increase latency and cost.
+   a `BedrockError` or when the model twice fails to call the required
+   structured answer tool. Do not extend this into unbounded retries or retry
+   other validation/application failures; repeated model calls increase latency
+   and cost.
    Inside one answer operation, an invalid structured submission followed by
    free text may receive one new bounded submit reminder; it must not fail only
    because an earlier reminder was consumed before the invalid submission.

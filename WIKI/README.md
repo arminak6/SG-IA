@@ -299,10 +299,12 @@ shared source corpus and reindexed by RAG.
   structured `manager_action` object. `correction` remains as a compatibility
   alias during the POC.
 - Read-only Q&A retries the complete answer-agent operation exactly once when a
-  Bedrock request fails. Successful first attempts have no extra model cost;
-  recovered responses expose `debug.answer_attempts: 2` and
-  `debug.answer_retry_applied: true`. A second Bedrock failure still returns a
-  sanitized 503, and non-Bedrock application errors are never hidden by retries.
+  Bedrock request fails or when the model fails to submit the required
+  structured grounded answer after its in-operation reminder. Successful first
+  attempts have no extra model cost; recovered responses expose
+  `debug.answer_attempts: 2` and `debug.answer_retry_applied: true`. A second
+  recoverable failure still returns a sanitized 503, and unrelated validation
+  or application errors are never hidden by retries.
   Within an operation, an invalid structured answer followed by free text can
   receive one fresh bounded submission reminder instead of failing immediately.
   Each Bedrock transport request has a 60-second read timeout and one SDK
