@@ -13,7 +13,10 @@ class FakeService:
         self.updated_paths: object = "not-called"
         self.questions: list[str] = []
         self.session_ids: list[str | None] = []
+        self.user_ids: list[str | None] = []
         self.repair_max_links: int | None = None
+        self.preferences: list[str] = []
+        self.reset_requests: list[tuple[str, str]] = []
 
     def health(self):
         return {
@@ -52,9 +55,10 @@ class FakeService:
             "failed": [],
         }
 
-    def ask(self, question, *, session_id=None):
+    def ask(self, question, *, session_id=None, user_id=None):
         self.questions.append(question)
         self.session_ids.append(session_id)
+        self.user_ids.append(user_id)
         return {
             "approach": "wiki",
             "status": "answered",
@@ -78,6 +82,29 @@ class FakeService:
                     "reasons": [],
                 },
             },
+        }
+
+    def get_user_profile(self, user_id):
+        return {
+            "user_id": user_id,
+            "preferences": list(self.preferences),
+            "updated_at": None,
+        }
+
+    def update_user_profile(self, user_id, preferences):
+        self.preferences = list(preferences)
+        return {
+            "user_id": user_id,
+            "preferences": list(self.preferences),
+            "updated_at": "2026-08-26T10:00:00Z",
+        }
+
+    def reset_chat(self, user_id, session_id):
+        self.reset_requests.append((user_id, session_id))
+        return {
+            "user_id": user_id,
+            "session_id": session_id,
+            "history_deleted": True,
         }
 
     def list_wiki_pages(self):
@@ -184,10 +211,15 @@ class ApiTests(unittest.TestCase):
     def test_chat_trims_question_and_returns_wiki_and_raw_citations(self) -> None:
         response = self.client.post(
             "/chat",
-            json={"question": "  What is this?  ", "session_id": "session-123"},
+            json={
+                "question": "  What is this?  ",
+                "user_id": "user1",
+                "session_id": "session-123",
+            },
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.service.session_ids, ["session-123"])
+        self.assertEqual(self.service.user_ids, ["user1"])
         self.assertEqual(response.json()["confidence_score"], 8.7)
         self.assertFalse(response.json()["debug"]["guardrail"]["applied"])
         self.assertEqual(self.service.questions, ["What is this?"])
@@ -215,9 +247,44 @@ class ApiTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 422)
 
+    def test_chat_rejects_unsafe_user_identifier(self) -> None:
+        response = self.client.post(
+            "/chat",
+            json={"question": "Hello", "user_id": "../unsafe"},
+        )
+        self.assertEqual(response.status_code, 422)
+
+    def test_user_profile_can_be_loaded_and_updated(self) -> None:
+        before = self.client.get("/users/profile", params={"user_id": "user1"})
+        updated = self.client.put(
+            "/users/profile",
+            json={
+                "user_id": "user1",
+                "preferences": ["Always answer me in Italian."],
+            },
+        )
+
+        self.assertEqual(before.status_code, 200)
+        self.assertEqual(before.json()["preferences"], [])
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(
+            updated.json()["preferences"],
+            ["Always answer me in Italian."],
+        )
+
+    def test_new_chat_deletes_only_the_named_session_history(self) -> None:
+        response = self.client.post(
+            "/chat/reset",
+            json={"user_id": "user1", "session_id": "session-123"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["history_deleted"])
+        self.assertEqual(self.service.reset_requests, [("user1", "session-123")])
+
     def test_chat_returns_structured_correction_state(self) -> None:
         class CorrectionService(FakeService):
-            def ask(self, question, *, session_id=None):
+            def ask(self, question, *, session_id=None, user_id=None):
                 return {
                     "approach": "wiki",
                     "status": "manager_action_proposed",
@@ -325,7 +392,7 @@ class ApiTests(unittest.TestCase):
 
     def test_unexpected_service_error_is_sanitized(self) -> None:
         class BrokenService(FakeService):
-            def ask(self, question, *, session_id=None):
+            def ask(self, question, *, session_id=None, user_id=None):
                 raise RuntimeError("secret-key-value")
 
         app.dependency_overrides[get_service] = BrokenService

@@ -121,6 +121,13 @@ class ChatResponse:
     manager_action: dict[str, Any] | None = None
 
 
+@dataclass(frozen=True)
+class UserProfile:
+    user_id: str
+    preferences: tuple[str, ...]
+    updated_at: str | None = None
+
+
 class WikiApiClient:
     """Access the FastAPI service without leaking transport details into the UI."""
 
@@ -219,10 +226,53 @@ class WikiApiClient:
             failed=tuple(failed),
         )
 
-    def chat(self, question: str, *, session_id: str | None = None) -> ChatResponse:
+    def get_user_profile(self, user_id: str) -> UserProfile:
+        payload = self._request(
+            "GET",
+            "/users/profile",
+            params={"user_id": user_id},
+            timeout=(1.0, 10.0),
+        )
+        return self._parse_user_profile(payload)
+
+    def update_user_profile(
+        self,
+        user_id: str,
+        preferences: Sequence[str],
+    ) -> UserProfile:
+        payload = self._request(
+            "PUT",
+            "/users/profile",
+            json={"user_id": user_id, "preferences": list(preferences)},
+            timeout=(1.0, 10.0),
+        )
+        return self._parse_user_profile(payload)
+
+    def reset_chat(self, user_id: str, session_id: str) -> bool:
+        payload = self._request(
+            "POST",
+            "/chat/reset",
+            json={"user_id": user_id, "session_id": session_id},
+            timeout=(1.0, 10.0),
+        )
+        if not isinstance(payload, Mapping) or not isinstance(
+            payload.get("history_deleted"), bool
+        ):
+            raise WikiApiError("The backend returned an invalid chat-reset response.")
+        return bool(payload["history_deleted"])
+
+    def chat(
+        self,
+        question: str,
+        *,
+        session_id: str | None = None,
+        user_id: str | None = None,
+    ) -> ChatResponse:
         body: dict[str, str] = {"question": question}
         if session_id:
             body["session_id"] = session_id
+        if user_id:
+            body["user_id"] = user_id
         payload = self._request(
             "POST",
             "/chat",
@@ -256,6 +306,25 @@ class WikiApiClient:
             manager_action=(
                 dict(raw_manager_action) if isinstance(raw_manager_action, Mapping) else None
             ),
+        )
+
+    @staticmethod
+    def _parse_user_profile(payload: Any) -> UserProfile:
+        if not isinstance(payload, Mapping):
+            raise WikiApiError("The backend returned an invalid user profile.")
+        user_id = payload.get("user_id")
+        preferences = payload.get("preferences")
+        if not isinstance(user_id, str) or not isinstance(preferences, list):
+            raise WikiApiError("The backend returned an invalid user profile.")
+        if not all(isinstance(item, str) for item in preferences):
+            raise WikiApiError("The backend returned invalid user preferences.")
+        updated_at = payload.get("updated_at")
+        if updated_at is not None and not isinstance(updated_at, str):
+            raise WikiApiError("The backend returned an invalid profile timestamp.")
+        return UserProfile(
+            user_id=user_id,
+            preferences=tuple(preferences),
+            updated_at=updated_at,
         )
 
     def _request(

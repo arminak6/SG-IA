@@ -41,6 +41,10 @@
 /WIKI/backend/feedback/**
 !/WIKI/backend/feedback/.gitkeep
 
+# Private per-user preferences and session transcripts (never Wiki knowledge).
+/WIKI/backend/user_data/**
+!/WIKI/backend/user_data/.gitkeep
+
 # RAG uploads, extraction artifacts, job state, and document manifests.
 /RAG/data/**
 !/RAG/data/README.md

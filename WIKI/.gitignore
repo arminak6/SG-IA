@@ -6,6 +6,8 @@ aws_credentials.json
 .streamlit/secrets.toml
 backend/wiki/.semantic-index.json
 backend/wiki/.semantic-index.json.lock
+backend/user_data/**
+!backend/user_data/.gitkeep
 
 # Python
 __pycache__/

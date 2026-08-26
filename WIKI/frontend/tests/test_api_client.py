@@ -95,7 +95,11 @@ class WikiApiClientTests(unittest.TestCase):
             }
         )
 
-        result = self.client.chat("What is it?", session_id="session-123")
+        result = self.client.chat(
+            "What is it?",
+            session_id="session-123",
+            user_id="user1",
+        )
 
         self.assertEqual(result.answer, "The answer.")
         self.assertEqual(
@@ -108,9 +112,61 @@ class WikiApiClientTests(unittest.TestCase):
         _, _, kwargs = self.session.request.mock_calls[0]
         self.assertEqual(
             kwargs["json"],
-            {"question": "What is it?", "session_id": "session-123"},
+            {
+                "question": "What is it?",
+                "session_id": "session-123",
+                "user_id": "user1",
+            },
         )
         self.assertEqual(kwargs["timeout"], (3.05, 600.0))
+
+    def test_user_profile_load_update_and_chat_reset(self) -> None:
+        self.session.request.side_effect = [
+            response(
+                {
+                    "user_id": "user1",
+                    "preferences": ["Always answer me in Italian."],
+                    "updated_at": "2026-08-26T10:00:00Z",
+                }
+            ),
+            response(
+                {
+                    "user_id": "user1",
+                    "preferences": ["Keep answers concise."],
+                    "updated_at": "2026-08-26T10:01:00Z",
+                }
+            ),
+            response(
+                {
+                    "user_id": "user1",
+                    "session_id": "session-123",
+                    "history_deleted": True,
+                }
+            ),
+        ]
+
+        loaded = self.client.get_user_profile("user1")
+        updated = self.client.update_user_profile(
+            "user1",
+            ["Keep answers concise."],
+        )
+        deleted = self.client.reset_chat("user1", "session-123")
+
+        self.assertEqual(loaded.preferences, ("Always answer me in Italian.",))
+        self.assertEqual(updated.preferences, ("Keep answers concise.",))
+        self.assertTrue(deleted)
+        self.assertEqual(
+            self.session.request.mock_calls[0].kwargs["params"],
+            {"user_id": "user1"},
+        )
+        self.assertEqual(
+            self.session.request.mock_calls[1].kwargs["json"],
+            {"user_id": "user1", "preferences": ["Keep answers concise."]},
+        )
+        self.assertEqual(
+            self.session.request.mock_calls[2].kwargs["json"],
+            {"user_id": "user1", "session_id": "session-123"},
+        )
 
     def test_chat_rejects_out_of_range_confidence(self) -> None:
         self.session.request.return_value = response(

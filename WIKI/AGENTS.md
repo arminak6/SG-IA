@@ -294,6 +294,24 @@ logic.
   temporary knowledge lifecycles passed add/answer plus three successive
   update/answer rounds without page-count growth; all temporary data was removed.
 
+### 2026-08-26: private user preferences and session chat context
+
+- The Streamlit POC now requires a simple claimed user name and keeps private
+  per-user data under `backend/user_data/`, outside `backend/wiki/` and its
+  search/indexing flow. Each user has structured `preferences.json`, a readable
+  `profile.md`, and exact per-session JSONL transcripts; all are Git-ignored
+  and mounted persistently in both Docker Compose entry points.
+- Grounded Q&A receives the active user's preferences and a bounded window of
+  only the current session's earlier turns. The prompt treats them as
+  presentation/conversation context, never factual evidence; normal Wiki reads
+  and citations remain mandatory. Calls without a user remain stateless for
+  benchmark compatibility.
+- Explicit durable preference statements and `/remember` are saved, while a
+  profile editor supports direct review and changes. **New chat** and **Sign
+  out** delete only the active session transcript and manager draft state while
+  retaining the profile and preferences. This remains an unauthenticated local
+  POC and must not be treated as an identity or privacy boundary.
+
 ## Data rules
 
 - Use the same agreed subset of `../material/` as the RAG implementation.

@@ -10,6 +10,7 @@ querying.
 ```text
 backend/raw/          Immutable source documents
 backend/wiki/         Bedrock-maintained Markdown knowledge base
+backend/user_data/    Private profiles and session transcripts (not Wiki knowledge)
 backend/AGENTS.md     Wiki schema and agent workflow
 backend/main.py       FastAPI application
 frontend/app.py       Streamlit interface
@@ -162,6 +163,36 @@ one of these limits fails clearly without creating partial wiki knowledge.
 Successful ingestion records a SHA-256 digest in the application-owned wiki
 manifest. Editing a raw file therefore makes it pending again. Knowledge-page,
 index, and manifest changes roll back together if a commit fails.
+
+## User preferences and session history (POC)
+
+The Streamlit UI asks for a simple user name before chat begins. This is a
+claimed local identity, not authentication. Entering a new name creates
+`backend/user_data/<user_id>/preferences.json` and a readable `profile.md`.
+The user can edit or clear durable preferences in the UI. Explicit chat requests
+such as `Always answer me in Italian`, `/remember Keep answers concise`, and
+`Forget my preferences` are also handled without adding anything to the Wiki.
+
+Each active chat writes its exact user and assistant messages to
+`backend/user_data/<user_id>/sessions/<session_id>.jsonl`. Before answering,
+the backend supplies a bounded window of that session's earlier messages and
+the saved preferences to the answer agent. Earlier sessions are never supplied.
+The model is instructed to use this private data only for conversational
+continuity and presentation; factual claims still require complete Wiki-page
+evidence and normal structured citations.
+
+**New chat** and **Sign out** delete the active session transcript and clear its
+in-memory manager-action state. They do not delete `preferences.json` or
+`profile.md`, so personalization survives the next visit. User data is
+Git-ignored, persisted through a dedicated Docker bind mount, and never stored
+under or indexed from `backend/wiki/`. Long sessions retain the exact JSONL
+transcript while only the latest 24 messages, capped at 16,000 characters, are
+sent to the model.
+
+API clients can continue calling `POST /chat` without a user, which preserves
+the stateless benchmark behavior. Personalized calls add `user_id` and
+`session_id`. `GET /users/profile`, `PUT /users/profile`, and
+`POST /chat/reset` support the UI lifecycle.
 
 ## Trusted-manager actions (POC)
 

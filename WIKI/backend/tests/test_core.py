@@ -1877,6 +1877,72 @@ The source says the answer is 42.
             self.assertIn('<raw_source path="raw/article.txt">', loaded_source)
             self.assertIn("The answer is 42.", loaded_source)
 
+    def test_answer_prompt_receives_preferences_and_only_supplied_session_history(self) -> None:
+        turns = [
+            assistant_turn(
+                {
+                    "toolUse": {
+                        "toolUseId": "read-1",
+                        "name": "read_wiki_page",
+                        "input": {"path": "sources/article.md"},
+                    }
+                }
+            ),
+            assistant_turn(
+                {
+                    "toolUse": {
+                        "toolUseId": "answer-1",
+                        "name": "submit_answer",
+                        "input": {
+                            "status": "answered",
+                            "answer": "La risposta e 42.",
+                            "citations": [
+                                {
+                                    "wiki_path": "sources/article.md",
+                                    "source_paths": ["raw/article.txt"],
+                                }
+                            ],
+                        },
+                    }
+                }
+            ),
+        ]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            backend_root = Path(temp_dir) / "backend"
+            raw_root = backend_root / "raw"
+            raw_root.mkdir(parents=True)
+            (raw_root / "article.txt").write_text("The answer is 42.", encoding="utf-8")
+            repository = WikiRepository(backend_root)
+            repository.write_wiki_pages(
+                {
+                    "sources/article.md": wiki_page(
+                        body="The source says the answer is 42."
+                    )
+                }
+            )
+            scripted = ScriptedBedrock(turns)
+            agent = WikiAgent(repository, scripted, max_steps=4)
+
+            result = agent.answer(
+                "And what was its value?",
+                conversation_history=(
+                    {"role": "user", "content": "What does the article discuss?"},
+                    {"role": "assistant", "content": "It discusses an answer value."},
+                ),
+                user_preferences=("Always answer me in Italian.",),
+            )
+
+            first_input = scripted.calls[0]["messages"][0]["content"][0]["text"]
+            system_prompt = scripted.calls[0]["system_prompt"]
+            self.assertEqual(result.status, "answered")
+            self.assertIn("Always answer me in Italian.", first_input)
+            self.assertIn("What does the article discuss?", first_input)
+            self.assertIn("Current question: And what was its value?", first_input)
+            self.assertIn(
+                "Neither preferences nor chat history are Wiki evidence.",
+                system_prompt,
+            )
+
     def test_bedrock_error_exposes_only_safe_error_code(self) -> None:
         class AccessDenied(Exception):
             response = {"Error": {"Code": "AccessDeniedException", "Message": "private"}}

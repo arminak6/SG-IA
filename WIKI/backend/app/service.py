@@ -27,6 +27,10 @@ from .manager_actions import (
 from .embeddings import TitanEmbeddingClient
 from .repository import RepositoryError, WikiRepository
 from .search import HybridWikiSearch
+from .user_memory import (
+    UserMemoryStore,
+    detect_preference_instruction,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -58,6 +62,7 @@ class WikiService:
         correction_interpreter: ManagerActionInterpreter | None = None,
         correction_store: ManagerActionStore | None = None,
         answer_fix_reviewer: AnswerFixReviewer | None = None,
+        user_memory_store: UserMemoryStore | None = None,
     ) -> None:
         self.settings = settings or load_settings()
         self.repository = repository or WikiRepository(
@@ -72,6 +77,9 @@ class WikiService:
         self._correction_interpreter = correction_interpreter
         self._correction_store = correction_store
         self._answer_fix_reviewer = answer_fix_reviewer
+        self.user_memory_store = user_memory_store or UserMemoryStore(
+            self.settings.backend_root / "user_data"
+        )
         self._update_lock = threading.Lock()
         self._session_lock = threading.RLock()
         self._sessions: OrderedDict[str, ManagerActionSession] = OrderedDict()
@@ -156,6 +164,34 @@ class WikiService:
 
     def list_wiki_pages(self) -> list[dict[str, object]]:
         return [page.to_dict() for page in self.repository.list_wiki_pages()]
+
+    def get_user_profile(self, user_id: str) -> dict[str, object]:
+        profile = self.user_memory_store.get_profile(user_id)
+        if profile.updated_at is None:
+            profile = self.user_memory_store.save_profile(profile.user_id, ())
+        return profile.to_dict()
+
+    def update_user_profile(
+        self,
+        user_id: str,
+        preferences: Sequence[str],
+    ) -> dict[str, object]:
+        return self.user_memory_store.save_profile(user_id, preferences).to_dict()
+
+    def reset_chat(self, user_id: str, session_id: str) -> dict[str, object]:
+        normalized_user = self.user_memory_store.normalize_user_id(user_id)
+        normalized_session = self.user_memory_store.normalize_session_id(session_id)
+        cleared = self.user_memory_store.clear_session(
+            normalized_user,
+            normalized_session,
+        )
+        with self._session_lock:
+            self._sessions.pop(normalized_session, None)
+        return {
+            "user_id": normalized_user,
+            "session_id": normalized_session,
+            "history_deleted": cleared,
+        }
 
     @staticmethod
     def _source_path(value: str) -> str:
@@ -282,21 +318,48 @@ class WikiService:
             return False
         return self.MANAGER_UPDATE_ACTION_PATTERN.search(content) is not None
 
-    def ask(self, question: str, *, session_id: str | None = None) -> dict[str, object]:
+    def ask(
+        self,
+        question: str,
+        *,
+        session_id: str | None = None,
+        user_id: str | None = None,
+    ) -> dict[str, object]:
         question = str(question).strip()
         started_at = time.perf_counter()
         normalized_session_id = str(session_id).strip() if session_id else None
+        normalized_user_id = (
+            self.user_memory_store.normalize_user_id(user_id) if user_id else None
+        )
+        conversation_history: tuple[dict[str, str], ...] = ()
+        preferences: tuple[str, ...] = ()
+        if normalized_user_id:
+            preferences = self.user_memory_store.get_profile(
+                normalized_user_id
+            ).preferences
+            if normalized_session_id:
+                conversation_history = self.user_memory_store.read_session_context(
+                    normalized_user_id,
+                    normalized_session_id,
+                )
         if normalized_session_id:
             if (
                 self._session(normalized_session_id) is None
                 and self.correction_interpreter.is_control_command(question)
             ):
-                return self._correction_response(
+                response = self._correction_response(
                     status="manager_action_not_pending",
                     answer=self._no_pending_action_message(),
                     proposal=None,
                     state="not_pending",
                     started_at=started_at,
+                )
+                return self._complete_chat(
+                    normalized_user_id,
+                    normalized_session_id,
+                    question,
+                    response,
+                    include_in_context=False,
                 )
             if (
                 self._session(normalized_session_id) is None
@@ -314,27 +377,96 @@ class WikiService:
                 started_at=started_at,
             )
             if correction_response is not None:
-                return correction_response
+                return self._complete_chat(
+                    normalized_user_id,
+                    normalized_session_id,
+                    question,
+                    correction_response,
+                    include_in_context=False,
+                )
             if self.correction_interpreter.looks_like_unmarked_action(question):
-                return self._correction_response(
+                response = self._correction_response(
                     status="manager_action_command_required",
                     answer=self._action_command_required_message(),
                     proposal=None,
                     state="command_required",
                     started_at=started_at,
                 )
+                return self._complete_chat(
+                    normalized_user_id,
+                    normalized_session_id,
+                    question,
+                    response,
+                    include_in_context=False,
+                )
 
-        response = self._answer_question(question, started_at=started_at)
+        preference_instruction = (
+            detect_preference_instruction(question) if normalized_user_id else None
+        )
+        if preference_instruction is not None:
+            if preference_instruction.action == "clear":
+                profile = self.user_memory_store.save_profile(normalized_user_id, ())
+                response = self._preference_response(
+                    question,
+                    "preferences_cleared",
+                    profile.preferences,
+                    started_at=started_at,
+                )
+            else:
+                profile = self.user_memory_store.add_preference(
+                    normalized_user_id,
+                    preference_instruction.value or "",
+                )
+                response = self._preference_response(
+                    question,
+                    "preference_saved",
+                    profile.preferences,
+                    started_at=started_at,
+                )
+            return self._complete_chat(
+                normalized_user_id,
+                normalized_session_id,
+                question,
+                response,
+                include_in_context=False,
+            )
+
+        response = self._answer_question(
+            question,
+            started_at=started_at,
+            conversation_history=conversation_history,
+            user_preferences=preferences,
+        )
         if normalized_session_id:
             self._remember_answer(normalized_session_id, question, response)
-        return response
+        return self._complete_chat(
+            normalized_user_id,
+            normalized_session_id,
+            question,
+            response,
+            include_in_context=True,
+        )
 
-    def _answer_question(self, question: str, *, started_at: float) -> dict[str, object]:
+    def _answer_question(
+        self,
+        question: str,
+        *,
+        started_at: float,
+        conversation_history: Sequence[Mapping[str, str]] = (),
+        user_preferences: Sequence[str] = (),
+    ) -> dict[str, object]:
         answer_attempts = 0
         for attempt in range(1, self.MAX_ANSWER_ATTEMPTS + 1):
             answer_attempts = attempt
             try:
-                result = self.agent.answer(question)
+                if conversation_history or user_preferences:
+                    result = self.agent.answer(
+                        question,
+                        conversation_history=conversation_history,
+                        user_preferences=user_preferences,
+                    )
+                else:
+                    result = self.agent.answer(question)
                 break
             except BedrockError as exc:
                 if attempt < self.MAX_ANSWER_ATTEMPTS:
@@ -411,6 +543,8 @@ class WikiService:
         if isinstance(debug, dict):
             debug["answer_attempts"] = answer_attempts
             debug["answer_retry_applied"] = answer_attempts > 1
+            debug["history_messages_used"] = len(conversation_history)
+            debug["user_preferences_used"] = len(user_preferences)
             debug["guardrail"] = {
                 "enabled": self.settings.answer_guardrail_enabled,
                 "applied": guardrail_applied,
@@ -449,6 +583,85 @@ class WikiService:
             # Logging is observability; it must not discard an already-grounded answer.
             pass
         return response
+
+    def _complete_chat(
+        self,
+        user_id: str | None,
+        session_id: str | None,
+        question: str,
+        response: dict[str, object],
+        *,
+        include_in_context: bool,
+    ) -> dict[str, object]:
+        if not user_id or not session_id:
+            return response
+        history_saved = True
+        try:
+            self.user_memory_store.append_exchange(
+                user_id,
+                session_id,
+                question,
+                response,
+                include_in_context=include_in_context,
+            )
+        except Exception as exc:
+            history_saved = False
+            logger.warning("Chat history could not be saved (%s)", type(exc).__name__)
+        debug = response.setdefault("debug", {})
+        if isinstance(debug, dict):
+            debug["history_saved"] = history_saved
+        return response
+
+    def _preference_response(
+        self,
+        question: str,
+        status: str,
+        preferences: Sequence[str],
+        *,
+        started_at: float,
+    ) -> dict[str, object]:
+        italian = bool(
+            re.search(r"\b(?:italian|italiano|italiana|preferenza|ricorda)\b", question, re.I)
+        )
+        if status == "preferences_cleared":
+            answer = (
+                "Ho eliminato le tue preferenze salvate."
+                if italian
+                else "I cleared your saved preferences."
+            )
+        else:
+            answer = (
+                "Ho salvato questa preferenza e la user\u00f2 nelle prossime chat."
+                if italian
+                else "I saved this preference and will use it in future chats."
+            )
+        return {
+            "approach": "wiki",
+            "status": status,
+            "answer": answer,
+            "citations": [],
+            "usage": {},
+            "latency_ms": round((time.perf_counter() - started_at) * 1000, 2),
+            "model_id": self.settings.bedrock_model_id,
+            "confidence_score": None,
+            "debug": {
+                "pages_read": [],
+                "search_queries": [],
+                "search_modes": [],
+                "retrieval_diagnostics": [],
+                "answer_attempts": 1,
+                "answer_retry_applied": False,
+                "history_messages_used": 0,
+                "user_preferences_used": len(preferences),
+                "guardrail": {
+                    "enabled": self.settings.answer_guardrail_enabled,
+                    "applied": False,
+                    "original_status": status,
+                    "verification_available": False,
+                    "reasons": [],
+                },
+            },
+        }
 
     def _handle_correction_message(
         self,

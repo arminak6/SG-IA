@@ -75,6 +75,12 @@ class UpdateWikiResponse(ApiModel):
 
 class ChatRequest(ApiModel):
     question: str = Field(min_length=1, max_length=10_000)
+    user_id: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9_.-]+$",
+    )
     session_id: Optional[str] = Field(
         default=None,
         min_length=1,
@@ -111,7 +117,57 @@ class ChatDebugResponse(ApiModel):
     retrieval_diagnostics: List[dict[str, object]] = Field(default_factory=list)
     answer_attempts: int = Field(default=1, ge=1, le=2)
     answer_retry_applied: bool = False
+    history_messages_used: int = Field(default=0, ge=0)
+    user_preferences_used: int = Field(default=0, ge=0)
+    history_saved: Optional[bool] = None
     guardrail: ChatGuardrailResponse = Field(default_factory=ChatGuardrailResponse)
+
+
+class UserProfileUpdateRequest(ApiModel):
+    user_id: str = Field(
+        min_length=1,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9_.-]+$",
+    )
+    preferences: List[str] = Field(default_factory=list, max_length=20)
+
+    @field_validator("preferences")
+    @classmethod
+    def validate_preferences(cls, preferences: List[str]) -> List[str]:
+        cleaned: List[str] = []
+        for preference in preferences:
+            value = " ".join(preference.strip().split())
+            if not value:
+                continue
+            if len(value) > 500:
+                raise ValueError("each preference must be at most 500 characters")
+            cleaned.append(value)
+        return cleaned
+
+
+class UserProfileResponse(ApiModel):
+    user_id: str
+    preferences: List[str] = Field(default_factory=list)
+    updated_at: Optional[str] = None
+
+
+class ChatResetRequest(ApiModel):
+    user_id: str = Field(
+        min_length=1,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9_.-]+$",
+    )
+    session_id: str = Field(
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9_.-]+$",
+    )
+
+
+class ChatResetResponse(ApiModel):
+    user_id: str
+    session_id: str
+    history_deleted: bool
 
 
 class ChatCorrectionResponse(ApiModel):

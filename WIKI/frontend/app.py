@@ -528,6 +528,129 @@ elif not bedrock_ready:
         "server configuration before updating the wiki or asking questions."
     )
 
+if "active_user_id" not in st.session_state:
+    st.info(
+        "This POC uses a simple user name for private preferences and session history. "
+        "It is not authentication."
+    )
+    with st.form("user_login"):
+        requested_user_id = st.text_input(
+            "User name",
+            placeholder="user1",
+            max_chars=64,
+        )
+        enter_chat = st.form_submit_button(
+            "Enter",
+            type="primary",
+            disabled=not backend_online,
+        )
+    if enter_chat:
+        try:
+            profile = api.get_user_profile(requested_user_id.strip())
+            st.session_state.active_user_id = profile.user_id
+            st.session_state.user_preferences = list(profile.preferences)
+            st.session_state.preference_editor_version = 0
+            st.session_state.chat_session_id = uuid4().hex
+            st.session_state.messages = [
+                {
+                    "role": "assistant",
+                    "content": (
+                        f"Hello {profile.user_id}! Ask me a question and I will answer "
+                        "from the maintained wiki with citations."
+                    ),
+                    "citations": [],
+                }
+            ]
+            st.rerun()
+        except WikiApiError as exc:
+            st.error(str(exc))
+    st.stop()
+
+active_user_id = str(st.session_state.active_user_id)
+identity_col, new_chat_col, sign_out_col = st.columns([4, 1, 1])
+identity_col.markdown(f"Signed in as **{escape(active_user_id)}**")
+
+if new_chat_col.button("New chat", use_container_width=True):
+    try:
+        api.reset_chat(active_user_id, st.session_state.chat_session_id)
+        st.session_state.chat_session_id = uuid4().hex
+        st.session_state.messages = [
+            {
+                "role": "assistant",
+                "content": (
+                    f"New chat started for {active_user_id}. Your saved preferences "
+                    "are still active."
+                ),
+                "citations": [],
+            }
+        ]
+        st.session_state.pop("manager_action_mode", None)
+        st.session_state.pop("manager_action_details", None)
+        st.toast("The previous session history was deleted.")
+        st.rerun()
+    except WikiApiError as exc:
+        st.error(str(exc))
+
+if sign_out_col.button("Sign out", use_container_width=True):
+    try:
+        api.reset_chat(active_user_id, st.session_state.chat_session_id)
+        for key in (
+            "active_user_id",
+            "user_preferences",
+            "preference_editor_version",
+            "chat_session_id",
+            "messages",
+            "manager_action_mode",
+            "manager_action_details",
+        ):
+            st.session_state.pop(key, None)
+        st.rerun()
+    except WikiApiError as exc:
+        st.error(str(exc))
+
+with st.expander("User preferences", expanded=False):
+    st.caption(
+        "One durable preference per line. These personalize answers but are never "
+        "indexed as Wiki knowledge. You can also say 'Always answer me in Italian' "
+        "or use '/remember ...' in chat."
+    )
+    with st.form("user_preferences_form"):
+        preference_text = st.text_area(
+            "Saved preferences",
+            value="\n".join(st.session_state.get("user_preferences", [])),
+            height=120,
+            key=(
+                f"user_preferences_editor::{active_user_id}::"
+                f"{st.session_state.get('preference_editor_version', 0)}"
+            ),
+        )
+        save_preferences = st.form_submit_button("Save preferences", type="primary")
+    if save_preferences:
+        try:
+            requested_preferences = [
+                line.strip() for line in preference_text.splitlines() if line.strip()
+            ]
+            profile = api.update_user_profile(active_user_id, requested_preferences)
+            st.session_state.user_preferences = list(profile.preferences)
+            st.session_state.preference_editor_version = (
+                int(st.session_state.get("preference_editor_version", 0)) + 1
+            )
+            st.toast("Preferences saved.")
+            st.rerun()
+        except WikiApiError as exc:
+            st.error(str(exc))
+    if st.button("Clear preferences", key="clear_user_preferences"):
+        try:
+            profile = api.update_user_profile(active_user_id, [])
+            st.session_state.user_preferences = list(profile.preferences)
+            st.session_state.preference_editor_version = (
+                int(st.session_state.get("preference_editor_version", 0)) + 1
+            )
+            st.toast("Preferences cleared.")
+            st.rerun()
+        except WikiApiError as exc:
+            st.error(str(exc))
+
 if "messages" not in st.session_state:
     st.session_state.messages = [
         {
@@ -586,6 +709,7 @@ if question:
                 response = api.chat(
                     question,
                     session_id=st.session_state.chat_session_id,
+                    user_id=active_user_id,
                 )
             assistant_message = {
                 "role": "assistant",
@@ -597,6 +721,12 @@ if question:
             }
             if manager_message is not None and response.status != "manager_action_error":
                 st.session_state.clear_manager_action_on_next_run = True
+            if response.status in {"preference_saved", "preferences_cleared"}:
+                profile = api.get_user_profile(active_user_id)
+                st.session_state.user_preferences = list(profile.preferences)
+                st.session_state.preference_editor_version = (
+                    int(st.session_state.get("preference_editor_version", 0)) + 1
+                )
         except WikiApiError as exc:
             assistant_message = {
                 "role": "assistant",

@@ -19,6 +19,8 @@ from fastapi.middleware.cors import CORSMiddleware
 try:  # Allows both ``uvicorn backend.main:app`` and direct module execution.
     from .api_models import (
         ChatRequest,
+        ChatResetRequest,
+        ChatResetResponse,
         ChatResponse,
         CitationResponse,
         DocumentResponse,
@@ -30,6 +32,8 @@ try:  # Allows both ``uvicorn backend.main:app`` and direct module execution.
         LinkRepairResponse,
         UpdateWikiRequest,
         UpdateWikiResponse,
+        UserProfileResponse,
+        UserProfileUpdateRequest,
         WikiPageResponse,
         WikiPagesResponse,
         WikiLintIssue,
@@ -40,6 +44,8 @@ try:  # Allows both ``uvicorn backend.main:app`` and direct module execution.
 except ImportError:  # pragma: no cover - direct script compatibility
     from api_models import (  # type: ignore[no-redef]
         ChatRequest,
+        ChatResetRequest,
+        ChatResetResponse,
         ChatResponse,
         CitationResponse,
         DocumentResponse,
@@ -51,6 +57,8 @@ except ImportError:  # pragma: no cover - direct script compatibility
         LinkRepairResponse,
         UpdateWikiRequest,
         UpdateWikiResponse,
+        UserProfileResponse,
+        UserProfileUpdateRequest,
         WikiPageResponse,
         WikiPagesResponse,
         WikiLintIssue,
@@ -269,7 +277,11 @@ def update_wiki(
 @app.post("/chat", response_model=ChatResponse, tags=["chat"])
 def chat(request: ChatRequest, service: Any = Depends(get_service)) -> ChatResponse:
     try:
-        result = service.ask(request.question, session_id=request.session_id)
+        result = service.ask(
+            request.question,
+            session_id=request.session_id,
+            user_id=request.user_id,
+        )
         if isinstance(result, str):
             return ChatResponse(
                 approach="wiki",
@@ -294,6 +306,57 @@ def chat(request: ChatRequest, service: Any = Depends(get_service)) -> ChatRespo
         )
     except Exception as exc:
         raise _service_error("answer the question", exc) from exc
+
+
+@app.get(
+    "/users/profile",
+    response_model=UserProfileResponse,
+    tags=["users"],
+)
+def get_user_profile(
+    user_id: str,
+    service: Any = Depends(get_service),
+) -> UserProfileResponse:
+    try:
+        return UserProfileResponse(**model_to_dict(service.get_user_profile(user_id)))
+    except Exception as exc:
+        raise _service_error("load the user profile", exc) from exc
+
+
+@app.put(
+    "/users/profile",
+    response_model=UserProfileResponse,
+    tags=["users"],
+)
+def update_user_profile(
+    request: UserProfileUpdateRequest,
+    service: Any = Depends(get_service),
+) -> UserProfileResponse:
+    try:
+        return UserProfileResponse(
+            **model_to_dict(
+                service.update_user_profile(request.user_id, request.preferences)
+            )
+        )
+    except Exception as exc:
+        raise _service_error("update the user profile", exc) from exc
+
+
+@app.post(
+    "/chat/reset",
+    response_model=ChatResetResponse,
+    tags=["chat"],
+)
+def reset_chat(
+    request: ChatResetRequest,
+    service: Any = Depends(get_service),
+) -> ChatResetResponse:
+    try:
+        return ChatResetResponse(
+            **model_to_dict(service.reset_chat(request.user_id, request.session_id))
+        )
+    except Exception as exc:
+        raise _service_error("reset the chat session", exc) from exc
 
 
 @app.get("/wiki/pages", response_model=WikiPagesResponse, tags=["wiki"])

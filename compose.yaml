@@ -101,6 +101,7 @@ services:
       - ./WIKI/backend/raw:/app/WIKI/backend/raw:ro
       - ./WIKI/backend/raw/manager-knowledge:/app/WIKI/backend/raw/manager-knowledge
       - ./WIKI/backend/feedback:/app/WIKI/backend/feedback
+      - ./WIKI/backend/user_data:/app/WIKI/backend/user_data
       - ./WIKI/backend/wiki:/app/WIKI/backend/wiki
       - ${SGIA_AWS_CREDENTIALS_FILE:-./WIKI/aws_credentials.example.json}:/app/WIKI/aws_credentials.json:ro
       - wiki_docling_model_cache:/root/.cache

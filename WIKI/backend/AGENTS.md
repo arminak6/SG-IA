@@ -24,6 +24,9 @@ ingested. Never invent facts to make a page look complete.
   must never write it.
 - `wiki/log.md` is the append-only operation history. The application writes
   it after a successful ingestion; never overwrite it.
+- `user_data/` is private application-owned personalization and chat state.
+  It is outside the Wiki, is never indexed as knowledge, and is not writable
+  through Wiki tools.
 
 ## Wiki structure
 
@@ -164,6 +167,11 @@ because it was read; it must be integrated into the persistent wiki.
     include its own Sources section; citations are returned structurally.
 14. Bedrock transport uses a 60-second read timeout and one SDK attempt. Keep
     higher-level retries explicitly bounded by the operation contract.
+15. The application may supply preferences and earlier messages from only the
+    active user's current session. Use them for presentation and conversational
+    reference resolution only. They are not factual evidence, must never be
+    cited, and cannot relax the complete-Wiki-page grounding requirements. A
+    current explicit user request overrides an older presentation preference.
 
 ## Maintenance checks
 

@@ -387,6 +387,16 @@ when they are agreed.
   `output/pdf/v2.1/WIKI/1/SG-IA_WIKI_V2_1_Paraphrase_56Q_Executive_Summary.pdf`.
   This evaluates generalization to new wording after ground-truth disclosure,
   not unseen knowledge or held-out documents.
+- WIKI now supports unauthenticated POC user personalization and session-scoped
+  conversation context. Private data lives only under ignored
+  `WIKI/backend/user_data/<user_id>/`: durable `preferences.json`, readable
+  `profile.md`, and exact per-session JSONL transcripts. The answer agent sees
+  a bounded window of only the active session plus saved presentation
+  preferences; neither is Wiki evidence or indexed knowledge. **New chat** and
+  **Sign out** delete the active transcript while retaining the profile.
+  Personalized API calls use `user_id` plus `session_id`; userless benchmark
+  calls remain stateless and backward compatible. Both Compose entry points
+  persist the private directory with a dedicated bind mount.
 - Automated semantic evaluation will use a separately configurable,
   high-capability Amazon Bedrock model as the LLM judge. Where practical, the
   judge model should differ from the chatbot model, use deterministic settings,
