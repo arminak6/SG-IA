@@ -162,17 +162,3 @@ derived from the private corpus. Offline evaluator tests remain safe to run:
 python -m unittest discover -s test_QA/WIKI/tests -v
 ```
 
-## Suggested Git workflow
-
-Create a small commit after each meaningful, tested step:
-
-```powershell
-git status
-git add .
-git diff --cached
-git commit -m "Describe the completed step"
-git push
-```
-
-Always review `git diff --cached` before committing. This is the final check
-that no credential, source document, or generated private content is included.
