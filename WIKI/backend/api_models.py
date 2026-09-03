@@ -73,6 +73,13 @@ class UpdateWikiResponse(ApiModel):
     failed: List[FailedDocumentResponse] = Field(default_factory=list)
 
 
+class UploadDocumentResponse(ApiModel):
+    document: DocumentResponse
+    duplicate: bool = False
+    update: UpdateWikiResponse
+    message: str
+
+
 class ChatRequest(ApiModel):
     question: str = Field(min_length=1, max_length=10_000)
     user_id: Optional[str] = Field(

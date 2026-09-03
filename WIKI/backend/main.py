@@ -11,10 +11,11 @@ import importlib
 import logging
 from functools import lru_cache
 from threading import Lock
-from typing import Any, Iterable, Mapping, Optional
+from typing import Annotated, Any, Iterable, Mapping, Optional
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.concurrency import run_in_threadpool
 
 try:  # Allows both ``uvicorn backend.main:app`` and direct module execution.
     from .api_models import (
@@ -30,6 +31,7 @@ try:  # Allows both ``uvicorn backend.main:app`` and direct module execution.
         LinkProposalResponse,
         LinkRepairRequest,
         LinkRepairResponse,
+        UploadDocumentResponse,
         UpdateWikiRequest,
         UpdateWikiResponse,
         UserProfileResponse,
@@ -55,6 +57,7 @@ except ImportError:  # pragma: no cover - direct script compatibility
         LinkProposalResponse,
         LinkRepairRequest,
         LinkRepairResponse,
+        UploadDocumentResponse,
         UpdateWikiRequest,
         UpdateWikiResponse,
         UserProfileResponse,
@@ -209,6 +212,27 @@ def _normalize_failed(values: Any) -> list[FailedDocumentResponse]:
     return failed
 
 
+def _normalize_document(value: Any) -> DocumentResponse:
+    item = model_to_dict(value)
+    return DocumentResponse(
+        relative_path=str(item["relative_path"]),
+        status=str(item["status"]),
+        size_bytes=int(item["size_bytes"]),
+        modified_at=item["modified_at"],
+    )
+
+
+def _normalize_update(value: Any) -> UpdateWikiResponse:
+    if isinstance(value, UpdateWikiResponse):
+        return value
+    payload = model_to_dict(value)
+    return UpdateWikiResponse(
+        processed=[_path_from_item(item) for item in payload.get("processed", [])],
+        skipped=[_path_from_item(item) for item in payload.get("skipped", [])],
+        failed=_normalize_failed(payload.get("failed", [])),
+    )
+
+
 @app.get("/health", response_model=HealthResponse, tags=["system"])
 def health(service: Any = Depends(get_service)) -> HealthResponse:
     try:
@@ -235,20 +259,47 @@ def list_documents(service: Any = Depends(get_service)) -> DocumentsResponse:
             values = result.get("documents", [])
         else:
             values = result
-        documents = []
-        for value in values:
-            item = model_to_dict(value)
-            documents.append(
-                DocumentResponse(
-                    relative_path=str(item["relative_path"]),
-                    status=str(item["status"]),
-                    size_bytes=int(item["size_bytes"]),
-                    modified_at=item["modified_at"],
-                )
-            )
+        documents = [_normalize_document(value) for value in values]
         return DocumentsResponse(documents=documents)
     except Exception as exc:
         raise _service_error("list documents", exc) from exc
+
+
+@app.post(
+    "/documents",
+    response_model=UploadDocumentResponse,
+    tags=["documents"],
+)
+async def upload_document(
+    file: Annotated[UploadFile, File()],
+    service: Any = Depends(get_service),
+) -> UploadDocumentResponse:
+    filename = file.filename or "document"
+    max_source_bytes = int(
+        getattr(getattr(service, "settings", None), "max_source_bytes", 25_000_000)
+    )
+    try:
+        content = await file.read(max_source_bytes + 1)
+    finally:
+        await file.close()
+    if len(content) > max_source_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail=f"The upload exceeds the {max_source_bytes} byte limit.",
+        )
+
+    try:
+        payload = model_to_dict(
+            await run_in_threadpool(service.upload_document, filename, content)
+        )
+        return UploadDocumentResponse(
+            document=_normalize_document(payload.get("document", {})),
+            duplicate=bool(payload.get("duplicate", False)),
+            update=_normalize_update(payload.get("update", {})),
+            message=str(payload.get("message", "Shared document upload finished.")),
+        )
+    except Exception as exc:
+        raise _service_error("upload and ingest the document", exc) from exc
 
 
 @app.post("/wiki/update", response_model=UpdateWikiResponse, tags=["wiki"])
@@ -262,14 +313,7 @@ def update_wiki(
         # service still processes each source in the batch sequentially.
         with _update_lock:
             result = service.update_wiki(paths)
-        if isinstance(result, UpdateWikiResponse):
-            return result
-        payload = model_to_dict(result)
-        return UpdateWikiResponse(
-            processed=[_path_from_item(item) for item in payload.get("processed", [])],
-            skipped=[_path_from_item(item) for item in payload.get("skipped", [])],
-            failed=_normalize_failed(payload.get("failed", [])),
-        )
+        return _normalize_update(result)
     except Exception as exc:
         raise _service_error("update the wiki", exc) from exc
 

@@ -3,5 +3,6 @@ docling==2.119.0
 fastapi==0.141.1
 filelock==3.32.2
 pydantic==2.13.4
+python-multipart==0.0.32
 PyYAML==6.0.3
 uvicorn[standard]==0.52.1

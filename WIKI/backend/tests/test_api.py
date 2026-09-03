@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
@@ -10,7 +11,9 @@ from backend.main import app, get_service
 
 class FakeService:
     def __init__(self) -> None:
+        self.settings = SimpleNamespace(max_source_bytes=1_000)
         self.updated_paths: object = "not-called"
+        self.uploaded_documents: list[tuple[str, bytes]] = []
         self.questions: list[str] = []
         self.session_ids: list[str | None] = []
         self.user_ids: list[str | None] = []
@@ -53,6 +56,29 @@ class FakeService:
             ],
             "skipped": [],
             "failed": [],
+        }
+
+    def upload_document(self, filename, content):
+        self.uploaded_documents.append((filename, content))
+        return {
+            "document": {
+                "relative_path": "uploads/abc/example.txt",
+                "status": "Ingested",
+                "size_bytes": len(content),
+                "modified_at": datetime(2026, 9, 3, 9, 0, tzinfo=timezone.utc),
+            },
+            "duplicate": False,
+            "update": {
+                "processed": [
+                    {
+                        "source_path": "raw/uploads/abc/example.txt",
+                        "message": "Integrated shared knowledge.",
+                    }
+                ],
+                "skipped": [],
+                "failed": [],
+            },
+            "message": "The document was uploaded and added to the shared Wiki.",
         }
 
     def ask(self, question, *, session_id=None, user_id=None):
@@ -188,6 +214,39 @@ class ApiTests(unittest.TestCase):
         response = self.client.get("/documents")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["documents"][0]["relative_path"], "example.md")
+
+    def test_upload_document_adds_one_shared_source_and_returns_ingestion(self) -> None:
+        response = self.client.post(
+            "/documents",
+            files={"file": ("example.txt", b"Shared knowledge", "text/plain")},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            self.service.uploaded_documents,
+            [("example.txt", b"Shared knowledge")],
+        )
+        payload = response.json()
+        self.assertEqual(
+            payload["document"]["relative_path"],
+            "uploads/abc/example.txt",
+        )
+        self.assertEqual(
+            payload["update"]["processed"],
+            ["raw/uploads/abc/example.txt"],
+        )
+        self.assertFalse(payload["duplicate"])
+
+    def test_upload_document_rejects_oversized_content_before_service(self) -> None:
+        self.service.settings.max_source_bytes = 3
+
+        response = self.client.post(
+            "/documents",
+            files={"file": ("example.txt", b"four", "text/plain")},
+        )
+
+        self.assertEqual(response.status_code, 413)
+        self.assertEqual(self.service.uploaded_documents, [])
 
     def test_update_without_body_processes_all_pending(self) -> None:
         response = self.client.post("/wiki/update")

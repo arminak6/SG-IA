@@ -239,6 +239,49 @@ def render_sidebar(
         if wiki_page_count is not None:
             st.caption(f"{wiki_page_count} wiki page(s) available")
 
+        with st.expander("Upload shared knowledge", expanded=False):
+            st.caption(
+                "Upload one document to the global Wiki. After ingestion, its "
+                "knowledge is available to every user."
+            )
+            uploaded_source = st.file_uploader(
+                "Shared document",
+                type=["md", "markdown", "txt", "json", "csv", "pdf", "docx", "pptx"],
+                accept_multiple_files=False,
+                disabled=not bedrock_ready,
+                help=(
+                    "Supported: Markdown, TXT, JSON, CSV, PDF, DOCX, and PPTX. "
+                    "Maximum file size: 25 MB."
+                ),
+                key="shared_source_upload",
+            )
+            upload_requested = st.button(
+                "Upload and add to Wiki",
+                type="primary",
+                use_container_width=True,
+                disabled=not bedrock_ready or uploaded_source is None,
+                help=(
+                    "The backend stores the source immutably, integrates related "
+                    "knowledge, and refreshes Wiki search."
+                ),
+                key="upload_shared_source",
+            )
+            if upload_requested and uploaded_source is not None:
+                try:
+                    with st.spinner("Uploading and integrating shared knowledge..."):
+                        upload_result = api.upload_document(
+                            uploaded_source.name,
+                            uploaded_source.getvalue(),
+                            media_type=uploaded_source.type,
+                        )
+                    st.session_state.last_update_result = (
+                        upload_result.update.as_dict()
+                    )
+                    st.session_state.update_notice = upload_result.message
+                    st.rerun()
+                except WikiApiError as exc:
+                    st.error(str(exc))
+
         selected_pending_paths = st.multiselect(
             "Documents to ingest",
             options=pending_paths,

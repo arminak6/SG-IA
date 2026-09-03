@@ -113,6 +113,14 @@ class UpdateResult:
 
 
 @dataclass(frozen=True)
+class UploadResult:
+    document: ApiDocument
+    duplicate: bool
+    update: UpdateResult
+    message: str
+
+
+@dataclass(frozen=True)
 class ChatResponse:
     answer: str
     citations: tuple[str, ...]
@@ -149,22 +157,7 @@ class WikiApiClient:
     def list_documents(self) -> list[ApiDocument]:
         payload = self._request("GET", "/documents", timeout=(1.0, 10.0))
         items = _extract_list(payload, "documents")
-        documents: list[ApiDocument] = []
-        for item in items:
-            if not isinstance(item, Mapping):
-                raise WikiApiError("The backend returned an invalid document entry.")
-            relative_path = str(item.get("relative_path", "")).replace("\\", "/")
-            if not relative_path:
-                raise WikiApiError("The backend returned a document without a path.")
-            documents.append(
-                ApiDocument(
-                    relative_path=relative_path,
-                    status=str(item.get("status", "Pending")).title(),
-                    size_bytes=_safe_int(item.get("size_bytes")),
-                    modified_at=item.get("modified_at"),
-                )
-            )
-        return documents
+        return [_parse_document(item) for item in items]
 
     def list_pages(self) -> list[dict[str, Any]]:
         payload = self._request("GET", "/wiki/pages", timeout=(1.0, 10.0))
@@ -185,47 +178,42 @@ class WikiApiClient:
         )
         if not isinstance(payload, Mapping):
             raise WikiApiError("The backend returned an invalid update result.")
+        return _parse_update_result(payload)
 
-        processed: list[ProcessedUpdate] = []
-        for item in _as_list(payload.get("processed", [])):
-            if isinstance(item, Mapping):
-                processed.append(
-                    ProcessedUpdate(
-                        path=_item_path(item),
-                        message=str(item.get("message", "")),
-                    )
+    def upload_document(
+        self,
+        filename: str,
+        content: bytes,
+        *,
+        media_type: str | None = None,
+    ) -> UploadResult:
+        payload = self._request(
+            "POST",
+            "/documents",
+            files={
+                "file": (
+                    filename,
+                    content,
+                    media_type or "application/octet-stream",
                 )
-            else:
-                processed.append(ProcessedUpdate(path=str(item)))
-
-        skipped: list[SkippedUpdate] = []
-        for item in _as_list(payload.get("skipped", [])):
-            if isinstance(item, Mapping):
-                skipped.append(
-                    SkippedUpdate(
-                        path=_item_path(item),
-                        reason=str(item.get("reason", "")),
-                    )
-                )
-            else:
-                skipped.append(SkippedUpdate(path=str(item)))
-
-        failed: list[FailedUpdate] = []
-        for item in _as_list(payload.get("failed", [])):
-            if isinstance(item, Mapping):
-                failed.append(
-                    FailedUpdate(
-                        path=_item_path(item),
-                        error=str(item.get("error", "Unknown error")),
-                    )
-                )
-            else:
-                failed.append(FailedUpdate(path=str(item), error="Update failed"))
-
-        return UpdateResult(
-            processed=tuple(processed),
-            skipped=tuple(skipped),
-            failed=tuple(failed),
+            },
+            timeout=(3.05, 600.0),
+        )
+        if not isinstance(payload, Mapping):
+            raise WikiApiError("The backend returned an invalid upload result.")
+        raw_document = payload.get("document")
+        raw_update = payload.get("update")
+        if not isinstance(raw_document, Mapping) or not isinstance(raw_update, Mapping):
+            raise WikiApiError("The backend returned an invalid upload result.")
+        duplicate = payload.get("duplicate", False)
+        message = payload.get("message")
+        if not isinstance(duplicate, bool) or not isinstance(message, str):
+            raise WikiApiError("The backend returned invalid upload metadata.")
+        return UploadResult(
+            document=_parse_document(raw_document),
+            duplicate=duplicate,
+            update=_parse_update_result(raw_update),
+            message=message,
         )
 
     def get_user_profile(self, user_id: str) -> UserProfile:
@@ -375,6 +363,64 @@ def _extract_list(payload: Any, envelope_key: str) -> list[Any]:
     if not isinstance(value, list):
         raise WikiApiError(f"The backend returned an invalid {envelope_key} list.")
     return value
+
+
+def _parse_document(value: Any) -> ApiDocument:
+    if not isinstance(value, Mapping):
+        raise WikiApiError("The backend returned an invalid document entry.")
+    relative_path = str(value.get("relative_path", "")).replace("\\", "/")
+    if not relative_path:
+        raise WikiApiError("The backend returned a document without a path.")
+    return ApiDocument(
+        relative_path=relative_path,
+        status=str(value.get("status", "Pending")).title(),
+        size_bytes=_safe_int(value.get("size_bytes")),
+        modified_at=value.get("modified_at"),
+    )
+
+
+def _parse_update_result(payload: Mapping[str, Any]) -> UpdateResult:
+    processed: list[ProcessedUpdate] = []
+    for item in _as_list(payload.get("processed", [])):
+        if isinstance(item, Mapping):
+            processed.append(
+                ProcessedUpdate(
+                    path=_item_path(item),
+                    message=str(item.get("message", "")),
+                )
+            )
+        else:
+            processed.append(ProcessedUpdate(path=str(item)))
+
+    skipped: list[SkippedUpdate] = []
+    for item in _as_list(payload.get("skipped", [])):
+        if isinstance(item, Mapping):
+            skipped.append(
+                SkippedUpdate(
+                    path=_item_path(item),
+                    reason=str(item.get("reason", "")),
+                )
+            )
+        else:
+            skipped.append(SkippedUpdate(path=str(item)))
+
+    failed: list[FailedUpdate] = []
+    for item in _as_list(payload.get("failed", [])):
+        if isinstance(item, Mapping):
+            failed.append(
+                FailedUpdate(
+                    path=_item_path(item),
+                    error=str(item.get("error", "Unknown error")),
+                )
+            )
+        else:
+            failed.append(FailedUpdate(path=str(item), error="Update failed"))
+
+    return UpdateResult(
+        processed=tuple(processed),
+        skipped=tuple(skipped),
+        failed=tuple(failed),
+    )
 
 
 def _as_list(value: Any) -> list[Any]:

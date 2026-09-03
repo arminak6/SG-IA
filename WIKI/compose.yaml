@@ -22,6 +22,7 @@ services:
       - "${WIKI_API_PORT:-8002}:8000"
     volumes:
       - ./backend/raw:/app/WIKI/backend/raw:ro
+      - ./backend/raw/uploads:/app/WIKI/backend/raw/uploads
       - ./backend/raw/manager-knowledge:/app/WIKI/backend/raw/manager-knowledge
       - ./backend/feedback:/app/WIKI/backend/feedback
       - ./backend/user_data:/app/WIKI/backend/user_data

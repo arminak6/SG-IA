@@ -387,6 +387,13 @@ when they are agreed.
   artifacts are under `test_QA/experiments/v2.1/WIKI/report/`, and the two-page
   report is
   `output/pdf/v2.1/WIKI/1/SG-IA_WIKI_V2_1_Paraphrase_56Q_Executive_Summary.pdf`.
+  A focused two-page three-stage report compares the 56 linked cases before
+  correction (2.18/5; 0/56 at least 4), after correction with exact wording
+  (4.66/5; 54/56), and after correction with paraphrased wording (4.66/5;
+  55/56). It uses only the recorded runs, clearly frames this as
+  correction-driven adaptation rather than unseen-knowledge generalization,
+  and is stored at
+  `output/pdf/v2.1/WIKI/2/SG-IA_WIKI_Three_Stage_Knowledge_Adaptation_Comparison.pdf`.
   This evaluates generalization to new wording after ground-truth disclosure,
   not unseen knowledge or held-out documents.
 - WIKI now supports unauthenticated POC user personalization and session-scoped

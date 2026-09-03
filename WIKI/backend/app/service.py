@@ -169,6 +169,37 @@ class WikiService:
     def list_documents(self) -> list[dict[str, object]]:
         return [document.to_dict() for document in self.repository.list_raw_documents()]
 
+    def upload_document(self, filename: str, content: bytes) -> dict[str, object]:
+        """Store one shared immutable source and ingest it into the global Wiki."""
+
+        document, duplicate = self.repository.save_uploaded_source(filename, content)
+        update = self.update_wiki([document.relative_path])
+        refreshed = next(
+            (
+                candidate
+                for candidate in self.repository.list_raw_documents()
+                if candidate.relative_path == document.relative_path
+            ),
+            document,
+        )
+        if update.get("failed"):
+            message = (
+                "The document was stored as a shared source, but Wiki ingestion failed. "
+                "It remains pending and can be retried."
+            )
+        elif duplicate and not update.get("processed"):
+            message = "This shared document already exists and is already available in the Wiki."
+        elif duplicate:
+            message = "The existing shared document was reused and added to the Wiki."
+        else:
+            message = "The document was uploaded and added to the shared Wiki knowledge base."
+        return {
+            "document": refreshed.to_dict(),
+            "duplicate": duplicate,
+            "update": update,
+            "message": message,
+        }
+
     def list_wiki_pages(self) -> list[dict[str, object]]:
         return [page.to_dict() for page in self.repository.list_wiki_pages()]
 

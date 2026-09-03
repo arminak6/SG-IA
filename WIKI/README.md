@@ -76,8 +76,11 @@ docker-compose logs --tail 100 wiki-api
 ```
 
 The host `backend/raw/` directory is mounted read-only except for the nested
-`backend/raw/manager-knowledge/` directory. A confirmed addition creates one
-stable subject file there; later updates replace that file instead of adding
+`backend/raw/uploads/` and `backend/raw/manager-knowledge/` directories.
+General UI uploads are stored immutably in content-addressed directories under
+`uploads/` and become shared knowledge visible to every user after ingestion.
+A confirmed manager addition creates one stable subject file under
+`manager-knowledge/`; later updates replace that file instead of adding
 documents. Any legacy `manager-actions/` files are read-only under the parent
 mount. `backend/wiki/` and `backend/feedback/` are mounted read/write.
 These private directories are excluded from the image build and from Git.
@@ -163,6 +166,13 @@ one of these limits fails clearly without creating partial wiki knowledge.
 Successful ingestion records a SHA-256 digest in the application-owned wiki
 manifest. Editing a raw file therefore makes it pending again. Knowledge-page,
 index, and manifest changes roll back together if a commit fails.
+
+The Streamlit sidebar can upload one general document at a time. The backend
+stores it under `raw/uploads/<sha256>/`, reuses identical uploads, and
+immediately runs the normal ingestion flow. The ingestion agent inspects
+relevant existing pages, integrates durable overlap, and creates useful Wiki
+cross-links. If ingestion fails, the immutable source remains pending and can be
+retried from the document list.
 
 ## User preferences and session history (POC)
 
@@ -300,6 +310,9 @@ shared source corpus and reindexed by RAG.
 ## API checks
 
 - `GET /documents` lists pending/ingested sources.
+- `POST /documents` accepts one multipart `file`, stores it as an immutable
+  global source, and immediately runs WIKI ingestion. The response reports the
+  shared document, duplicate status, and per-document ingestion result.
 - `POST /wiki/update` ingests selected pending sources sequentially.
   Manager-knowledge sources are deliberately skipped here so bulk ingestion
   cannot bypass confirmation and existing-page update restrictions.

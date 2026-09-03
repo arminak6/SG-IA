@@ -82,6 +82,45 @@ class WikiApiClientTests(unittest.TestCase):
         self.assertEqual(result.skipped[0].reason, "Current")
         self.assertEqual(result.failed[0].error, "Unsupported")
 
+    def test_upload_sends_multipart_and_parses_ingestion_result(self) -> None:
+        self.session.request.return_value = response(
+            {
+                "document": {
+                    "relative_path": "uploads/abc/shared.txt",
+                    "status": "ingested",
+                    "size_bytes": 16,
+                    "modified_at": "2026-09-03T09:00:00Z",
+                },
+                "duplicate": False,
+                "update": {
+                    "processed": ["raw/uploads/abc/shared.txt"],
+                    "skipped": [],
+                    "failed": [],
+                },
+                "message": "Added to the shared Wiki.",
+            }
+        )
+
+        result = self.client.upload_document(
+            "shared.txt",
+            b"Shared knowledge",
+            media_type="text/plain",
+        )
+
+        _, _, kwargs = self.session.request.mock_calls[0]
+        self.assertEqual(
+            kwargs["files"],
+            {"file": ("shared.txt", b"Shared knowledge", "text/plain")},
+        )
+        self.assertNotIn("json", kwargs)
+        self.assertEqual(result.document.relative_path, "uploads/abc/shared.txt")
+        self.assertTrue(result.document.is_ingested)
+        self.assertEqual(
+            result.update.processed[0].path,
+            "raw/uploads/abc/shared.txt",
+        )
+        self.assertFalse(result.duplicate)
+
     def test_chat_parses_answer_and_citations(self) -> None:
         self.session.request.return_value = response(
             {

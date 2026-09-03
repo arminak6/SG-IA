@@ -15,7 +15,9 @@ from common import (
 )
 
 
-EXCLUDED_WIKI_DIRECTORIES = frozenset({"manager-actions", "manager-knowledge"})
+EXCLUDED_WIKI_DIRECTORIES = frozenset(
+    {"manager-actions", "manager-knowledge", "uploads"}
+)
 
 
 def arguments() -> argparse.Namespace:

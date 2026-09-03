@@ -34,6 +34,10 @@ class SourceReadError(RepositoryError):
     """Raised when a raw source cannot safely be read as text."""
 
 
+class UploadValidationError(ValueError):
+    """Raised when uploaded bytes cannot become an immutable raw source."""
+
+
 @dataclass(frozen=True)
 class RawDocument:
     relative_path: str
@@ -117,6 +121,8 @@ class WikiRepository:
     BINARY_SOURCE_SUFFIXES = DoclingDocumentExtractor.SUPPORTED_SUFFIXES
     SOURCE_SUFFIXES = TEXT_SOURCE_SUFFIXES | BINARY_SOURCE_SUFFIXES
     MANAGER_KNOWLEDGE_DIR = "manager-knowledge"
+    UPLOADS_DIR = "uploads"
+    SAFE_UPLOAD_FILENAME = re.compile(r"[^A-Za-z0-9._ -]+")
 
     def __init__(
         self,
@@ -262,6 +268,109 @@ class WikiRepository:
         except RepositoryError:
             return False
         return True
+
+    @classmethod
+    def safe_upload_filename(cls, filename: str) -> str:
+        """Return a portable basename while preserving a supported suffix."""
+
+        supplied = str(filename or "document").replace("\\", "/")
+        basename = PurePosixPath(supplied).name.strip()
+        cleaned = cls.SAFE_UPLOAD_FILENAME.sub("_", basename).strip(" .")
+        suffix = PurePosixPath(cleaned).suffix.casefold()
+        if suffix not in cls.SOURCE_SUFFIXES:
+            supported = ", ".join(sorted(cls.SOURCE_SUFFIXES))
+            raise UploadValidationError(
+                f"Unsupported file type. Supported extensions: {supported}."
+            )
+
+        stem = PurePosixPath(cleaned).stem.strip(" ._") or "document"
+        stem_limit = max(1, 180 - len(suffix))
+        return f"{stem[:stem_limit].rstrip(' .')}{suffix}"
+
+    def save_uploaded_source(
+        self,
+        filename: str,
+        content: bytes,
+    ) -> tuple[RawDocument, bool]:
+        """Store one general upload immutably under raw/uploads.
+
+        Content-addressed directories make repeated uploads idempotent and
+        ensure that new bytes never overwrite an existing raw source. The
+        returned boolean is true when identical uploaded bytes already exist.
+        """
+
+        if not isinstance(content, bytes) or not content:
+            raise UploadValidationError("The uploaded file is empty.")
+        if len(content) > self.max_source_bytes:
+            raise UploadValidationError(
+                f"The upload exceeds the {self.max_source_bytes} byte limit."
+            )
+
+        safe_name = self.safe_upload_filename(filename)
+        suffix = PurePosixPath(safe_name).suffix.casefold()
+        if suffix in self.TEXT_SOURCE_SUFFIXES:
+            try:
+                decoded = content.decode("utf-8-sig")
+            except UnicodeDecodeError as exc:
+                raise UploadValidationError(
+                    "Uploaded Markdown, TXT, JSON, and CSV files must use UTF-8."
+                ) from exc
+            if len(decoded) > self.max_extracted_characters:
+                raise UploadValidationError(
+                    "The uploaded text exceeds the extracted-content safety limit "
+                    f"of {self.max_extracted_characters} characters."
+                )
+
+        digest = hashlib.sha256(content).hexdigest()
+        relative_directory = f"{self.UPLOADS_DIR}/{digest}"
+        upload_directory = self._contained_path(self.raw_root, relative_directory)
+        target = self._contained_path(upload_directory, safe_name)
+
+        with self._write_lock:
+            try:
+                upload_directory.mkdir(parents=True, exist_ok=True)
+                existing = sorted(
+                    (
+                        path
+                        for path in upload_directory.iterdir()
+                        if path.is_file()
+                        and not path.name.startswith(".")
+                        and path.suffix.casefold() in self.SOURCE_SUFFIXES
+                    ),
+                    key=lambda path: path.name.casefold(),
+                )
+                if existing:
+                    existing_target = existing[0]
+                    existing_digest = hashlib.sha256(existing_target.read_bytes()).hexdigest()
+                    if existing_digest != digest:
+                        raise RepositoryError(
+                            "The shared upload store contains a conflicting content path."
+                        )
+                    target = existing_target
+                    duplicate = True
+                else:
+                    self._atomic_write_bytes(target, content)
+                    duplicate = False
+                stat = target.stat()
+            except RepositoryError:
+                raise
+            except OSError as exc:
+                raise RepositoryError(
+                    "Could not store the shared upload. Check that raw/uploads is writable."
+                ) from exc
+
+        relative_path = target.relative_to(self.raw_root).as_posix()
+        source_path = f"raw/{relative_path}"
+        return (
+            RawDocument(
+                relative_path=relative_path,
+                source_path=source_path,
+                size_bytes=stat.st_size,
+                modified_at=datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
+                is_ingested=self.is_ingested(source_path),
+            ),
+            duplicate,
+        )
 
     def write_manager_knowledge_source(
         self,
